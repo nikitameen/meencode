@@ -29,13 +29,17 @@ let saving = false
 
 export async function initSessionDb(): Promise<void> {
   if (db) return
-  const wasmPath = path.join(process.resourcesPath ?? '', 'sql-wasm.wasm')
-  const appPath = app.getAppPath()
-  // dev: node_modules; packaged: bundled resource
-  const wasm =
-    fs.existsSync(wasmPath)
-      ? wasmPath
-      : path.join(appPath, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm')
+  // resolve sql-wasm.wasm: packaged (extraResources) first, then dev node_modules
+  const candidates = [
+    path.join(process.resourcesPath ?? '', 'sql-wasm.wasm'),
+    path.join(process.resourcesPath ?? '', 'resources', 'sql-wasm.wasm'),
+    path.join(app.getAppPath(), 'sql-wasm.wasm'),
+    path.join(app.getAppPath(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm')
+  ]
+  const wasm = candidates.find((p) => {
+    try { return fs.existsSync(p) } catch { return false }
+  })
+  if (!wasm) throw new Error('sql-wasm.wasm not found (dev: npm install; packaged: missing extraResource)')
   const wasmBinary = fs.readFileSync(wasm)
   const buffer = wasmBinary.buffer.slice(wasmBinary.byteOffset, wasmBinary.byteOffset + wasmBinary.byteLength) as ArrayBuffer
   const SQL = await initSqlJs({ wasmBinary: buffer })
