@@ -4,7 +4,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { isRepo, stateFor, logFor } from './gitCore'
-import { memory, retrieveRelevant } from './workspaceMemory'
+import { memory, retrieveRelevant, readRecentHistory } from './workspaceMemory'
 import { isQueryableText } from './agent/codebaseIndexBridge'
 
 export interface IDEContext {
@@ -77,6 +77,10 @@ export function buildContextBlock(ide: IDEContext, userText: string): string {
       parts.push(`--- Possibly relevant code (keyword match on your message) ---\n${block}`)
     }
   }
+
+  // ---- persistent session history (context across restarts) ----
+  const hist = readRecentHistory()
+  if (hist) parts.push(`--- Recent session history (previous conversations, oldest first) ---\n${hist}`)
 
   // ---- last failed command ----
   if (lastFailedCommand && Date.now() - lastFailedCommand.ts < 30 * 60 * 1000) {

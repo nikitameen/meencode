@@ -9,6 +9,7 @@ import { runLoop, truncate, compactHistory } from './loop'
 import { SUBAGENTS, SPAWN_AGENT_TOOL, orchestratorSystemPrompt, parsePlan, parseVerdict, type SubAgentName } from './subagents'
 import { searchCodebaseIndex } from './codebaseIndexBridge'
 import { buildContextBlock, type IDEContext } from '../agentContext'
+import { appendHistory } from '../workspaceMemory'
 import type { AgentMessage, ToolCall, ToolDef } from '../../shared/agent/types'
 
 /** role-based model routing: cheap roles use the fast model, code roles use the big model */
@@ -119,6 +120,8 @@ export class AgentSession {
       this.history.push(...result.newMessages)
       this.history = compactHistory(this.history)
       this.io.emit({ type: 'message', role: 'assistant', content: result.content })
+      // persist the exchange so future sessions start with context
+      try { appendHistory(text, result.content) } catch { /* best-effort */ }
     } catch (e: any) {
       if (controller.signal.aborted) {
         this.io.emit({ type: 'run_end', runId, error: 'aborted' })

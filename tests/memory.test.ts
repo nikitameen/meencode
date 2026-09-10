@@ -4,7 +4,7 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { indexWorkspace, findSymbol, retrieveRelevant, buildMemoryMarkdown, memory, writeMemoryFile } from '../src/main/workspaceMemory'
+import { indexWorkspace, findSymbol, retrieveRelevant, buildMemoryMarkdown, memory, writeMemoryFile, updateFile, dropFile, appendHistory, readRecentHistory } from '../src/main/workspaceMemory'
 import { setIndex, searchCodebaseIndex } from '../src/main/agent/codebaseIndexBridge'
 
 let tmp = ''
@@ -88,5 +88,49 @@ describe('workspace memory / auto-context', () => {
     const md = buildMemoryMarkdown({ roots: [tmp], files: 3, lines: 10, symbols: 4, ms: 5, memoryPath: null })
     expect(md).toContain('## Key symbols')
     expect(md).toContain('Rules for agents')
+  })
+
+  it('incrementally updates the index on file change (updateFile)', () => {
+    const before = searchCodebaseIndex('brandNewFeature', 5)
+    expect(before.length).toBe(0)
+    write('src/newmod.ts', 'export function brandNewFeature(): string {\n  return "live"\n}\n')
+    updateFile(path.join(tmp, 'src/newmod.ts'))
+    const after = searchCodebaseIndex('brandNewFeature', 5)
+    expect(after.length).toBeGreaterThan(0)
+    expect(after[0].path).toBe('src/newmod.ts')
+    // symbol picked up too
+    const sym = findSymbol('brandNewFeature')
+    expect(sym.length).toBeGreaterThan(0)
+    expect(sym[0].kind).toBe('function')
+  })
+
+  it('drops index entries when a file is deleted (dropFile)', () => {
+    const p = write('src/gone.ts', 'const temporaryValueXYZ = 1\n')
+    updateFile(p)
+    expect(searchCodebaseIndex('temporaryValueXYZ', 5).length).toBeGreaterThan(0)
+    fs.unlinkSync(p)
+    dropFile(p)
+    expect(searchCodebaseIndex('temporaryValueXYZ', 5).length).toBe(0)
+  })
+
+  it('re-indexing after edits replaces stale content', () => {
+    const p = path.join(tmp, 'src/newmod.ts')
+    fs.writeFileSync(p, 'export function brandNewFeatureV2(): string {\n  return "v2"\n}\n')
+    updateFile(p)
+    const hits = searchCodebaseIndex('brandNewFeatureV2', 5)
+    expect(hits.length).toBeGreaterThan(0)
+    // old line no longer present in the file, but the path-level search should reflect new content
+    expect(searchCodebaseIndex('return "live"', 5).length).toBe(0)
+  })
+
+  it('persists and reads session history', () => {
+    appendHistory('fix the login bug', 'fixed src/auth.ts — token was not refreshed')
+    const hist = readRecentHistory()
+    expect(hist).toBeTruthy()
+    expect(hist!).toContain('fix the login bug')
+    expect(hist!).toContain('token was not refreshed')
+    appendHistory('second task', 'done too')
+    const hist2 = readRecentHistory()
+    expect(hist2!).toContain('second task')
   })
 })

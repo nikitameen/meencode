@@ -59,18 +59,35 @@ export const memory = {
 }
 
 /** Incrementally update the index for one file (used by fs watchers). */
-export function indexFile(abs: string, root: string): void {
+export function updateFile(abs: string): void {
+  const scoped = relOf(abs)
+  if (!scoped) return
+  const rootIdx = Number(scoped.slice(0, scoped.indexOf(':')))
+  const rel = scoped.slice(scoped.indexOf(':') + 1)
   try {
-    const entries = extractEntries(abs, root)
-    setEntriesFor(abs, entries)
+    // keyword entries
+    const fileEntries = safeExtract(abs, path.resolve(memory.roots[rootIdx]))
+    setEntriesFor(abs, fileEntries)
+    // symbols: drop this file's, re-extract
+    memory.symbols = memory.symbols.filter((s) => !(s.root === rootIdx && s.path === rel))
+    extractSymbols(abs, path.resolve(memory.roots[rootIdx]), rootIdx)
+    // keep stats fresh
+    if (memory.stats) {
+      memory.stats.files = new Set(entries.map((e) => e.path)).size
+      memory.stats.lines = entries.length
+      memory.stats.symbols = memory.symbols.length
+    }
   } catch { /* unreadable */ }
 }
 
-/** Remove a file's entries from the shared keyword index (kept in the bridge). */
+/** Remove a file's entries from the shared keyword index (file deleted/renamed). */
 export function dropFile(abs: string): void {
-  const key = relOf(abs)
-  if (!key) return
   setEntriesFor(abs, [])
+  const scoped = relOf(abs)
+  if (!scoped) return
+  const rootIdx = Number(scoped.slice(0, scoped.indexOf(':')))
+  const rel = scoped.slice(scoped.indexOf(':') + 1)
+  memory.symbols = memory.symbols.filter((s) => !(s.root === rootIdx && s.path === rel))
 }
 
 // ---------------- multi-root indexing ----------------
@@ -102,13 +119,12 @@ function extractEntries(abs: string, root: string): IndexEntry[] {
 }
 
 function setEntriesFor(abs: string, newEntries: IndexEntry[]): void {
-  // index.js keeps entries per relative path; replacing means drop+push
-  // simple approach: filter out all entries with same path then append
-  const root = relOf(abs)
-  if (!root) return
-  const relRoot = root.includes(':') ? root.slice(root.indexOf(':') + 1) : root
+  const scoped = relOf(abs)
+  if (!scoped) return
+  const relRoot = scoped.slice(scoped.indexOf(':') + 1)
   entries = entries.filter((e) => e.path !== relRoot)
   entries.push(...newEntries)
+  memory.ready = true
   applyIndex()
 }
 
@@ -334,6 +350,39 @@ export function findSymbol(name: string, limit = 20): SymbolEntry[] {
   const hits = memory.symbols.filter((s) => s.name === n)
   if (hits.length > 0) return hits.slice(0, limit)
   return memory.symbols.filter((s) => s.name.toLowerCase().includes(n.toLowerCase())).slice(0, limit)
+}
+
+// ---------------- persistent session history ----------------
+
+/** Append a user/assistant exchange to .meencode/history.md (oldest trimmed, max ~60k). */
+export function appendHistory(user: string, assistant: string): void {
+  const primary = memory.roots[0]
+  if (!primary) return
+  try {
+    const dir = path.join(primary, '.meencode')
+    fs.mkdirSync(dir, { recursive: true })
+    const p = path.join(dir, 'history.md')
+    const stamp = new Date().toISOString().replace('T', ' ').slice(0, 16)
+    const block = `## ${stamp}\n**User:** ${user.replace(/\n+/g, ' ').slice(0, 500)}\n**Agent:** ${assistant.replace(/\n+/g, ' ').slice(0, 700)}\n\n`
+    let prev = ''
+    try { prev = fs.readFileSync(p, 'utf8') } catch { /* first entry */ }
+    fs.writeFileSync(p, (prev + block).slice(-60000))
+  } catch { /* best-effort */ }
+}
+
+/** Read the last few exchanges so new sessions start with context. */
+export function readRecentHistory(maxChars = 4000): string | null {
+  const primary = memory.roots[0]
+  if (!primary) return null
+  try {
+    const p = path.join(primary, '.meencode', 'history.md')
+    if (!fs.existsSync(p)) return null
+    const raw = fs.readFileSync(p, 'utf8').trimEnd()
+    if (!raw) return null
+    return raw.slice(-maxChars)
+  } catch {
+    return null
+  }
 }
 
 /** Keyword retrieval over the merged index — the "auto-context" for each message. */

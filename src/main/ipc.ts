@@ -13,7 +13,7 @@ import { registerImagesIPC } from './imagesIPC'
 import { registerWorkspaceImportIPC } from './workspaceImport'
 import { proxySafeFetch } from './proxyFetch'
 import { bindIndexWindow, autoIndex, isIndexing } from './indexingService'
-import { memory } from './workspaceMemory'
+import { memory, updateFile, dropFile } from './workspaceMemory'
 
 const IGNORED = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.meencode', '__pycache__',
@@ -315,14 +315,27 @@ function restartWatchers(): void {
     try { w.close() } catch { /* ignore */ }
   }
   watchers = []
+  pendingChanges.clear()
   const roots = getSettings().roots
   for (const root of roots) {
     try {
-      const w = fs.watch(path.resolve(root), { recursive: true }, (_event, filename) => {
+      const w = fs.watch(path.resolve(root), { recursive: true }, (event, filename) => {
+        const p = filename ? path.resolve(root, String(filename)) : path.resolve(root)
+        pendingChanges.add(p)
         if (watchDebounce) clearTimeout(watchDebounce)
         watchDebounce = setTimeout(() => {
-          const p = filename ? path.resolve(root, String(filename)) : root
-          win?.webContents?.send('fs:changed', { path: p, root })
+          const changed = [...pendingChanges]
+          pendingChanges.clear()
+          for (const abs of changed) {
+            win?.webContents?.send('fs:changed', { path: abs, root })
+            // live index update (ignore .meencode internals and ignored dirs)
+            const segs = abs.slice(path.resolve(root).length).split(path.sep)
+            if (segs.some((s) => IGNORED.has(s))) continue
+            try {
+              if (fs.existsSync(abs) && fs.statSync(abs).isFile()) updateFile(abs)
+              else if (!fs.existsSync(abs)) dropFile(abs)
+            } catch { /* transient */ }
+          }
         }, 300)
       })
       w.on('error', () => { /* ignore */ })
@@ -330,3 +343,5 @@ function restartWatchers(): void {
     } catch { /* recursive watch unsupported — skip */ }
   }
 }
+
+const pendingChanges = new Set<string>()
