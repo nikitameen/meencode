@@ -49,6 +49,9 @@ interface State {
   indexPct: number
   indexRootName: string | null
   indexStats: { files: number; lines: number; symbols: number } | null
+  sessions: { id: string; title: string; updatedAt: number; messageCount: number; preview: string }[]
+  activeSessionId: string | null
+  historyOpen: boolean
 }
 
 interface Actions {
@@ -72,6 +75,10 @@ interface Actions {
   toggleTerminal(): void
   toggleChat(): void
   toggleSidebar(): void
+  refreshSessions(): Promise<void>
+  loadSession(id: string): Promise<void>
+  deleteSession(id: string): Promise<void>
+  toggleHistory(): void
 }
 
 const uid = (): string => Math.random().toString(36).slice(2, 10)
@@ -107,6 +114,9 @@ export const useStore = create<State & Actions>((set, get) => ({
   indexPct: 0,
   indexRootName: null,
   indexStats: null,
+  sessions: [],
+  activeSessionId: null,
+  historyOpen: false,
 
   set: (key, value) => set({ [key]: value } as any),
 
@@ -285,6 +295,10 @@ export const useStore = create<State & Actions>((set, get) => ({
           feed: s.feed.map((f) => (f.id === e.id && f.kind === 'approval' ? { ...f, state: e.approved ? 'approved' : 'denied' } : f))
         })
         break
+      case 'session_start':
+        set({ activeSessionId: e.sessionId })
+        void get().refreshSessions()
+        break
       case 'run_end': {
         const feed = [...get().feed]
         const cur = get().currentAssistantId
@@ -294,6 +308,7 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
         const nextFeed = e.error ? [...feed, { id: uid(), kind: 'error' as const, text: e.error }] : feed
         set({ busy: false, currentAssistantId: null, feed: nextFeed, approvalsPending: 0 })
+        void get().refreshSessions()
         break
       }
     }
@@ -389,7 +404,49 @@ export const useStore = create<State & Actions>((set, get) => ({
 
   clearChat() {
     void window.meencode.agent.reset()
-    set({ feed: [], plan: [], changes: [], terminal: [] })
+    set({ feed: [], plan: [], changes: [], terminal: [], activeSessionId: null })
+  },
+
+  async refreshSessions() {
+    try {
+      const sessions = await window.meencode.sessions.list()
+      set({ sessions })
+    } catch { /* DB not ready */ }
+  },
+
+  async loadSession(id) {
+    try {
+      const r = await window.meencode.sessions.load(id)
+      if (!r.ok) return
+      const feed: FeedItem[] = []
+      for (const m of r.messages) {
+        if (m.role === 'user') feed.push({ id: uid(), kind: 'user', text: m.content })
+        else if (m.role === 'assistant' && m.content.trim()) feed.push({ id: uid(), kind: 'assistant', text: m.content })
+      }
+      // strip duplicated context blocks from restored user messages for display
+      for (const f of feed) {
+        if (f.kind === 'user') f.text = f.text.replace(/\n\n--- [^\n]*---\n[\s\S]*$/g, '')
+      }
+      set({ feed, plan: [], changes: [], activeSessionId: id, currentAssistantId: null })
+      await get().refreshSessions()
+    } catch { /* DB not ready */ }
+  },
+
+  async deleteSession(id) {
+    try {
+      await window.meencode.sessions.del(id)
+      if (get().activeSessionId === id) {
+        void window.meencode.agent.reset()
+        set({ feed: [], activeSessionId: null })
+      }
+      await get().refreshSessions()
+    } catch { /* DB not ready */ }
+  },
+
+  toggleHistory() {
+    const open = !get().historyOpen
+    set({ historyOpen: open })
+    if (open) void get().refreshSessions()
   },
 
   toggleTerminal() {

@@ -69,6 +69,12 @@ const api = {
     revertAll: () => ipcRenderer.invoke('agent:revertAll') as Promise<number>,
     onEvent: (cb: EventCb<AgentEvent>) => subscribe('agent:event', cb)
   },
+  sessions: {
+    list: () => ipcRenderer.invoke('sessions:list') as Promise<{ id: string; title: string; workspace: string | null; createdAt: number; updatedAt: number; messageCount: number; preview: string }[]>,
+    load: (sessionId: string) => ipcRenderer.invoke('sessions:load', sessionId) as Promise<{ ok: boolean; messages: { role: 'user' | 'assistant'; content: string }[] }>,
+    del: (sessionId: string) => ipcRenderer.invoke('sessions:delete', sessionId) as Promise<boolean>,
+    rename: (sessionId: string, title: string) => ipcRenderer.invoke('sessions:rename', sessionId, title) as Promise<boolean>
+  },
   index: {
     stats: () => ipcRenderer.invoke('index:stats') as Promise<{ ready: boolean; indexing: boolean; files: number; lines: number; symbols: number }>,
     onEvent: (cb: EventCb<{ phase: string; pct?: number; rootName?: string; filesDone?: number; totalFiles?: number }>) => subscribe('index:event', cb)

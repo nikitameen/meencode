@@ -46,6 +46,7 @@ export type AgentEvent =
   | { type: 'command_output'; id: string; chunk: string; stream: 'stdout' | 'stderr' }
   | { type: 'approval_request'; id: string; command: string }
   | { type: 'approval_result'; id: string; approved: boolean }
+  | { type: 'session_start'; sessionId: string; title: string }
   | { type: 'run_end'; runId: string; error?: string }
 
 export type { AgentMessage }

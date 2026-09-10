@@ -14,6 +14,7 @@ import { registerWorkspaceImportIPC } from './workspaceImport'
 import { proxySafeFetch } from './proxyFetch'
 import { bindIndexWindow, autoIndex, isIndexing } from './indexingService'
 import { memory, updateFile, dropFile } from './workspaceMemory'
+import * as sessionStore from './sessionStore'
 
 const IGNORED = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.meencode', '__pycache__',
@@ -208,6 +209,22 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
   ipcMain.handle('agent:stop', () => { session.stop(); return true })
   ipcMain.handle('agent:approve', (_e, id: string, ok: boolean) => session.resolveApproval(id, ok))
   ipcMain.handle('agent:reset', () => { session.reset(); return true })
+
+  // ---------- sessions (SQLite) ----------
+  ipcMain.handle('sessions:list', () => sessionStore.listSessions())
+  ipcMain.handle('sessions:load', (_e, sessionId: string) => {
+    const transcript = session.loadSession(String(sessionId ?? ''))
+    if (!transcript) return { ok: false as const, messages: [] }
+    return { ok: true as const, messages: transcript }
+  })
+  ipcMain.handle('sessions:delete', (_e, sessionId: string) => {
+    sessionStore.deleteSession(String(sessionId ?? ''))
+    return true
+  })
+  ipcMain.handle('sessions:rename', (_e, sessionId: string, title: string) => {
+    sessionStore.renameSession(String(sessionId ?? ''), String(title ?? ''))
+    return true
+  })
   ipcMain.handle('agent:revert', (_e, scoped: string) => session.revert(toLegacyRel(scoped)))
   ipcMain.handle('agent:revertAll', () => session.revertAll())
   ipcMain.handle('agent:changes', () => session.getChanges())

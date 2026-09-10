@@ -10,6 +10,7 @@ import { SUBAGENTS, SPAWN_AGENT_TOOL, orchestratorSystemPrompt, parsePlan, parse
 import { searchCodebaseIndex } from './codebaseIndexBridge'
 import { buildContextBlock, type IDEContext } from '../agentContext'
 import { appendHistory } from '../workspaceMemory'
+import * as sessionStore from '../sessionStore'
 import type { AgentMessage, ToolCall, ToolDef } from '../../shared/agent/types'
 
 /** role-based model routing: cheap roles use the fast model, code roles use the big model */
@@ -29,6 +30,7 @@ export class AgentSession {
   private toolkit: Toolkit | null = null
   private controller: AbortController | null = null
   private approvals = new Map<string, (ok: boolean) => void>()
+  private sessionId: string | null = null
   busy = false
   root: string | null = null
   roots: string[] = []
@@ -84,6 +86,16 @@ export class AgentSession {
     this.toolkit!.runId = runId
     this.io.emit({ type: 'run_start', runId })
 
+    // ---- session persistence ----
+    if (sessionStore.isSessionDbReady()) {
+      if (!this.sessionId) {
+        this.sessionId = randomUUID().slice(0, 8)
+        sessionStore.createSession(this.sessionId, text.replace(/\n/g, ' ').slice(0, 80) || 'New chat', this.root)
+        this.io.emit({ type: 'session_start', sessionId: this.sessionId, title: text.slice(0, 80) })
+      }
+      sessionStore.appendMessage(this.sessionId, 'user', text)
+    }
+
     try {
       let content = await this.enrichContext(text, attachedFile, ide ?? null)
       const userImages = (images ?? []).slice(0, 4)
@@ -119,7 +131,10 @@ export class AgentSession {
       this.history.push(...result.newMessages)
       this.history = compactHistoryBytes(this.history)
       this.io.emit({ type: 'message', role: 'assistant', content: result.content })
-      // persist the exchange so future sessions start with context
+      // persist to SQLite + markdown history
+      if (this.sessionId && sessionStore.isSessionDbReady()) {
+        sessionStore.appendMessage(this.sessionId, 'assistant', result.content)
+      }
       try { appendHistory(text, result.content) } catch { /* best-effort */ }
     } catch (e: any) {
       if (controller.signal.aborted) {
@@ -207,6 +222,29 @@ export class AgentSession {
   reset() {
     this.history = []
     this.plan = []
+    this.sessionId = null
+  }
+
+  /** Restore a historical session: returns the transcript or null. */
+  loadSession(sessionId: string): { role: 'user' | 'assistant'; content: string }[] | null {
+    if (!sessionStore.isSessionDbReady()) return null
+    const msgs = sessionStore.getSessionMessages(sessionId)
+    if (msgs.length === 0) return null
+    // rebuild agent history from user/assistant pairs
+    const history: AgentMessage[] = []
+    for (const m of msgs) {
+      if (m.role === 'user' || m.role === 'assistant') {
+        history.push({ role: m.role, content: m.content })
+      }
+    }
+    this.history = compactHistoryBytes(history, 30, 60000)
+    this.sessionId = sessionId
+    this.plan = []
+    return history.map((h) => ({ role: h.role as 'user' | 'assistant', content: String(h.content) }))
+  }
+
+  getSessionId(): string | null {
+    return this.sessionId
   }
 
   // ---------------- approvals ----------------

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { Icon, AGENT_COLORS, AGENT_LABELS, TOOL_LABELS } from './ui'
+import { SessionHistoryPanel } from './SessionHistoryPanel'
 
 export function ChatPanel() {
   const feed = useStore((s) => s.feed)
@@ -137,13 +138,25 @@ export function ChatPanel() {
         <span className="chat-title">
           <Icon name="sparkle" size={13} /> Meencode Agent
         </span>
-        <span className="chat-model">{settings?.model ?? ''}</span>
+        <div className="chat-header-right">
+          <span className="chat-model">{settings?.model ?? ''}</span>
+          <button
+            className={`icon-btn chat-history-btn ${useStore.getState().historyOpen ? 'on' : ''}`}
+            title="Chat history (Ctrl+Alt+H)"
+            onClick={() => useStore.getState().toggleHistory()}
+          >
+            <Icon name="revert" size={13} />
+          </button>
+        </div>
       </div>
-      <div className="chat-list" ref={listRef}>
-        {feed.length === 0 && <Welcome />}
-        {feed.map((item) => (
-          <FeedItemView key={item.id} item={item} />
-        ))}
+      <div className="chat-body">
+        <div className="chat-list" ref={listRef}>
+          {feed.length === 0 && <Welcome />}
+          {feed.map((item) => (
+            <FeedItemView key={item.id} item={item} />
+          ))}
+        </div>
+        <SessionHistoryPanel />
       </div>
       <div className="chat-input-wrap" onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)} onDrop={(e) => void onDrop(e)}>
         {dragOver && <div className="drop-overlay">Drop images to attach…</div>}

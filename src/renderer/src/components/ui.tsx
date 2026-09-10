@@ -2,7 +2,7 @@ type IconName =
   | 'folder' | 'folderOpen' | 'file' | 'chat' | 'terminal' | 'settings' | 'play' | 'stop' | 'check'
   | 'x' | 'revert' | 'sparkle' | 'chevronDown' | 'chevronRight' | 'chevronLeft' | 'plus' | 'plusFolder' | 'refresh'
   | 'search' | 'attach' | 'send' | 'min' | 'max' | 'close' | 'eye' | 'eyeOff' | 'alert' | 'review'
-    | 'external' | 'spinner' | 'dot' | 'git' | 'import' | 'browser' | 'dots'
+    | 'external' | 'spinner' | 'dot' | 'git' | 'import' | 'browser' | 'dots' | 'edit'
 
 export function Icon({ name, size = 14 }: { name: IconName; size?: number }) {
   const p: Record<IconName, React.ReactNode> = {
@@ -17,6 +17,7 @@ export function Icon({ name, size = 14 }: { name: IconName; size?: number }) {
     check: <path d="M2.5 8.5 6 12l7.5-8.5L12 2.5 6 8.7 4 6.7 2.5 8.5Z" />,
     x: <path d="M3 3l10 10M13 3L3 13" strokeWidth="1.6" fill="none" />,
     revert: <path d="M7.5 2.5 3 7l4.5 4.5v-3c3 0 5 1.5 5.5 4.5.5-4-1.5-7-5.5-7.5v-3Z" />,
+    edit: <path d="M11.5 1.8 14 4.3 5.3 13H2.5v-2.8L11.5 1.8Zm-1 2.1-.9.9 1.5 1.5.9-.9-1.5-1.5Z" />,
     sparkle: <path d="M8 1l1.7 4.6L14 7.3l-4.3 1.7L8 13.6 6.3 9 2 7.3l4.3-1.7L8 1Zm5.5 8.8.7 1.9 1.8.7-1.8.7-.7 1.9-.7-1.9-1.8-.7 1.8-.7.7-1.9Z" />,
     chevronDown: <path d="M3.5 6l4.5 4.5L12.5 6" strokeWidth="1.5" fill="none" />,
     chevronRight: <path d="M6 3.5L10.5 8 6 12.5" strokeWidth="1.5" fill="none" />,

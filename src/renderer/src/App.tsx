@@ -80,6 +80,9 @@ export function App() {
         e.preventDefault()
         const s = useStore.getState()
         s.set('searchOpen', !s.searchOpen)
+      } else if (mod && e.altKey && e.key.toLowerCase() === 'h') {
+        e.preventDefault()
+        useStore.getState().toggleHistory()
       } else if (mod && e.key === '`') {
         e.preventDefault()
         toggleTerminal()

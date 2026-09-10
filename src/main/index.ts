@@ -5,6 +5,7 @@ import { registerIPC, sendAgentEvent } from './ipc'
 import { loadSettings, getSettings } from './settingsStore'
 import { AgentSession } from './agent/orchestrator'
 import { disposeAllPty } from './ptyService'
+import { initSessionDb, pruneSessions } from './sessionStore'
 
 function loadDotEnv(): void {
   try {
@@ -80,6 +81,10 @@ if (!app.requestSingleInstanceLock()) {
     loadDotEnv()
     loadSettings()
     createWindow()
+    // session DB (SQLite) — failures degrade gracefully (no persistence)
+    void initSessionDb()
+      .then(() => pruneSessions())
+      .catch((e) => console.warn('session DB unavailable:', e?.message ?? e))
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
