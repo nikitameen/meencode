@@ -15,6 +15,7 @@ import { proxySafeFetch } from './proxyFetch'
 import { bindIndexWindow, autoIndex, isIndexing } from './indexingService'
 import { memory, updateFile, dropFile } from './workspaceMemory'
 import * as sessionStore from './sessionStore'
+import * as knowledgeStore from './knowledgeStore'
 
 const IGNORED = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.meencode', '__pycache__',
@@ -38,6 +39,8 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
 
   applyWorkspaceToSession()
   void autoIndex()
+  // seed knowledge (rules/skills) for the current workspace once the DB is up
+  seedKnowledgeWhenReady()
 
   // ---------- window / app ----------
   ipcMain.handle('win:minimize', () => win.minimize())
@@ -111,6 +114,7 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
     applyWorkspaceToSession()
     restartWatchers()
     void autoIndex()
+    knowledgeStore.ensureKnowledge(s.roots[0])
     return { ok: true, added: r.filePaths, roots: s.roots }
   })
 
@@ -123,6 +127,30 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
   })
 
   ipcMain.handle('workspace:roots', () => getSettings().roots)
+
+  // ---------- knowledge base (rules, instructions, skills, snippets) ----------
+  ipcMain.handle('knowledge:list', () => knowledgeStore.listKnowledge(getSettings().workspace))
+  ipcMain.handle('knowledge:add', (_e, entry: { kind: string; title: string; content: string; scope: 'global' | 'workspace'; enabled: boolean }) => {
+    const ws = entry.scope === 'global' ? null : getSettings().workspace
+    return knowledgeStore.addKnowledge({
+      kind: knowledgeStore.KNOWLEDGE_KINDS.includes(entry.kind as knowledgeStore.KnowledgeKind) ? (entry.kind as knowledgeStore.KnowledgeKind) : 'rule',
+      title: String(entry.title ?? ''),
+      content: String(entry.content ?? ''),
+      workspace: ws,
+      enabled: entry.enabled !== false
+    })
+  })
+  ipcMain.handle('knowledge:update', (_e, id: number, patch: { kind?: string; title?: string; content?: string; enabled?: boolean; scope?: 'global' | 'workspace' }) => {
+    return knowledgeStore.updateKnowledge(Number(id), {
+      ...patch,
+      kind: patch.kind && knowledgeStore.KNOWLEDGE_KINDS.includes(patch.kind as knowledgeStore.KnowledgeKind) ? (patch.kind as knowledgeStore.KnowledgeKind) : undefined,
+      workspace: patch.scope === 'global' ? null : patch.scope === 'workspace' ? getSettings().workspace : undefined
+    })
+  })
+  ipcMain.handle('knowledge:delete', (_e, id: number) => {
+    knowledgeStore.deleteKnowledge(Number(id))
+    return true
+  })
 
   ipcMain.handle('index:stats', () => ({
     ready: memory.ready,
@@ -140,6 +168,7 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
     applyWorkspaceToSession()
     restartWatchers()
     void autoIndex(true)
+    knowledgeStore.ensureKnowledge(s.roots[0])
     return s.roots[0]
   })
 
@@ -251,6 +280,18 @@ export function sendAgentEvent(e: unknown): void {
 }
 
 // ---------------- helpers ----------------
+
+/** Wait (bounded) for the session DB, then seed knowledge for the current workspace. */
+function seedKnowledgeWhenReady(): void {
+  const trySeed = (attempts: number): void => {
+    if (sessionStore.isSessionDbReady()) {
+      knowledgeStore.ensureKnowledge(getSettings().workspace)
+      return
+    }
+    if (attempts > 0) setTimeout(() => trySeed(attempts - 1), 500)
+  }
+  trySeed(20) // ~10s max
+}
 
 function applyWorkspaceToSession(): void {
   const roots = getSettings().roots

@@ -460,14 +460,14 @@ export class Toolkit {
     const change = this.changes.get(relPath)
     if (!change) return false
     const abs = this.resolve(relPath)
-    ;(async () => {
+    try {
       if (change.kind === 'created') {
-        await fs.promises.unlink(abs).catch(() => {})
+        fs.rmSync(abs, { force: true })
       } else {
-        await fs.promises.mkdir(path.dirname(abs), { recursive: true })
-        await fs.promises.writeFile(abs, change.before ?? '')
+        fs.mkdirSync(path.dirname(abs), { recursive: true })
+        fs.writeFileSync(abs, change.before ?? '')
       }
-    })()
+    } catch { /* best-effort */ }
     this.changes.delete(relPath)
     return true
   }

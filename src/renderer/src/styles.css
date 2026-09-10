@@ -450,8 +450,36 @@ a { color: var(--accent); cursor: pointer; }
 .palette-footer { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--border); color: var(--faint); font-size: 10.5px; }
 .palette-mode { margin-left: auto; display: flex; align-items: center; gap: 4px; color: var(--accent); }
 
+/* ---------------- knowledge modal ---------------- */
+.knowledge-body { flex-direction: row; gap: 12px; padding: 12px; }
+.knowledge-list-pane { flex: 1.2; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.knowledge-form { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; padding-left: 12px; border-left: 1px solid var(--border); }
+.knowledge-filters, .knowledge-kind-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.knowledge-filters .chip, .knowledge-kind-row .chip { padding: 4px 10px; font-size: 11px; cursor: pointer; border: 1px solid var(--border-light); border-radius: 14px; background: var(--bg1); color: var(--dim); }
+.knowledge-filters .chip.on, .knowledge-kind-row .chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.knowledge-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.knowledge-item { border: 1px solid var(--border); border-radius: 8px; background: var(--bg1); }
+.knowledge-item.editing { border-color: var(--accent); }
+.knowledge-item.disabled { opacity: 0.55; }
+.knowledge-item-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; cursor: pointer; }
+.knowledge-kind { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 9px; text-transform: uppercase; }
+.knowledge-kind.kind-rule { background: var(--accent-dim); color: var(--accent); }
+.knowledge-kind.kind-instruction { background: rgba(46, 160, 67, 0.15); color: var(--green); }
+.knowledge-kind.kind-skill { background: rgba(222, 135, 28, 0.15); color: #de871c; }
+.knowledge-kind.kind-snippet { background: rgba(170, 110, 220, 0.15); color: #aa6edc; }
+.knowledge-item-title { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-scope { font-size: 10px; color: var(--faint); }
+.knowledge-content { padding: 8px 12px; margin: 0 6px 8px; background: var(--bg2); border-radius: 6px; font-size: 11px; color: var(--dim); white-space: pre-wrap; max-height: 220px; overflow-y: auto; }
+.knowledge-textarea { width: 100%; resize: vertical; font-family: var(--font-mono); font-size: 12px; }
+.knowledge-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.toggle.mini { display: inline-flex; align-items: center; }
+.toggle.mini .toggle-track { width: 24px; height: 13px; }
+.toggle.mini .toggle-track .toggle-thumb { width: 9px; height: 9px; }
+
 .modal { width: 620px; max-width: 92vw; background: var(--bg2); border: 1px solid var(--border-light); border-radius: 12px; box-shadow: 0 16px 50px var(--shadow); overflow: hidden; }
 .modal.review { width: 900px; height: 70vh; display: flex; flex-direction: column; }
+.modal-wide { width: 860px; max-width: 94vw; height: 74vh; display: flex; flex-direction: column; }
+.modal-wide .modal-body { flex: 1; min-height: 0; }
 .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 13px; }
 .modal-header-actions { display: flex; gap: 8px; align-items: center; }
 .modal-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }

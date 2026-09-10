@@ -37,6 +37,7 @@ interface State {
   settingsModalOpen: boolean
   reviewModalOpen: boolean
   checkpointsModalOpen: boolean
+  knowledgeModalOpen: boolean
   currentAssistantId: string | null
   approvalsPending: number
   inlineEdit: import('./components/InlineEdit').InlineEditState
@@ -102,6 +103,7 @@ export const useStore = create<State & Actions>((set, get) => ({
   settingsModalOpen: false,
   reviewModalOpen: false,
   checkpointsModalOpen: false,
+  knowledgeModalOpen: false,
   currentAssistantId: null,
   approvalsPending: 0,
   inlineEdit: INLINE_EMPTY,

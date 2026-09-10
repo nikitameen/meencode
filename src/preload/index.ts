@@ -75,6 +75,14 @@ const api = {
     del: (sessionId: string) => ipcRenderer.invoke('sessions:delete', sessionId) as Promise<boolean>,
     rename: (sessionId: string, title: string) => ipcRenderer.invoke('sessions:rename', sessionId, title) as Promise<boolean>
   },
+  knowledge: {
+    list: () => ipcRenderer.invoke('knowledge:list') as Promise<{ id: number; kind: 'rule' | 'instruction' | 'skill' | 'snippet'; title: string; content: string; workspace: string | null; enabled: boolean; createdAt: number; updatedAt: number }[]>,
+    add: (entry: { kind: 'rule' | 'instruction' | 'skill' | 'snippet'; title: string; content: string; scope: 'global' | 'workspace'; enabled: boolean }) =>
+      ipcRenderer.invoke('knowledge:add', entry) as Promise<{ id: number; kind: string; title: string; content: string; workspace: string | null; enabled: boolean; createdAt: number; updatedAt: number } | null>,
+    update: (id: number, patch: { kind?: string; title?: string; content?: string; enabled?: boolean; scope?: 'global' | 'workspace' }) =>
+      ipcRenderer.invoke('knowledge:update', id, patch) as Promise<boolean>,
+    del: (id: number) => ipcRenderer.invoke('knowledge:delete', id) as Promise<boolean>
+  },
   index: {
     stats: () => ipcRenderer.invoke('index:stats') as Promise<{ ready: boolean; indexing: boolean; files: number; lines: number; symbols: number }>,
     onEvent: (cb: EventCb<{ phase: string; pct?: number; rootName?: string; filesDone?: number; totalFiles?: number }>) => subscribe('index:event', cb)

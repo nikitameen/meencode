@@ -24,6 +24,7 @@ export function CommandPalette() {
     () => [
       { id: 'open', label: 'Open Folder', hint: 'workspace', run: () => void store().openFolder() },
       { id: 'settings', label: 'Settings', hint: 'API key, model', run: () => set('settingsModalOpen', true) },
+      { id: 'knowledge', label: 'Knowledge Base', hint: 'rules, skills, instructions', run: () => set('knowledgeModalOpen', true) },
       { id: 'review', label: 'Review Changes', hint: 'diffs', run: () => set('reviewModalOpen', true) },
       { id: 'revert', label: 'Revert All Agent Changes', run: () => void store().revertAll() },
       { id: 'newchat', label: 'Clear Conversation', run: () => store().clearChat() },

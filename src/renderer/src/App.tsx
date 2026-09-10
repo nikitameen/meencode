@@ -12,6 +12,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { SettingsModal } from './components/SettingsModal'
 import { ReviewModal } from './components/ReviewModal'
 import { CheckpointsModal } from './components/CheckpointsModal'
+import { KnowledgeModal } from './components/KnowledgeModal'
 import { SearchPanel } from './components/SearchPanel'
 import { InlineEditBar } from './components/InlineEdit'
 import { StatusBar } from './components/StatusBar'
@@ -99,6 +100,7 @@ export function App() {
         set('paletteMode', null)
         set('settingsModalOpen', false)
         set('reviewModalOpen', false)
+        set('knowledgeModalOpen', false)
       }
     }
     const onMenuKeys = (e: KeyboardEvent) => {
@@ -212,6 +214,7 @@ export function App() {
       <SettingsModal />
       <ReviewModal />
       <CheckpointsModal />
+      <KnowledgeModal />
     </div>
   )
 }

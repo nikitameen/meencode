@@ -89,6 +89,7 @@ if (!app.requestSingleInstanceLock()) {
         pruneSessions()
         const db = getDb()
         if (db) bindSearchCache(db)
+        ensureKnowledge(getSettings().workspace)
       })
       .catch((e) => console.warn('session DB unavailable:', e?.message ?? e))
     app.on('activate', () => {
