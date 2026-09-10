@@ -139,6 +139,63 @@ describe('agent loop', () => {
     expect(toolMsg.content).toMatch(/disk on fire/)
     expect(res.content).toBe('recovered')
   })
+
+  it('returns ONLY this run\'s messages (no history duplication)', async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({ content: '', toolCalls: [{ id: '1', name: 'read_file', args: {} }] })
+      .mockResolvedValueOnce({ content: 'done', toolCalls: [] })
+    const history = [
+      { role: 'user' as const, content: 'earlier question' },
+      { role: 'assistant' as const, content: 'earlier answer' }
+    ]
+    const res = await runLoop(
+      { chat: chat as any, tools: noopTools, execute: async () => 'data', emit, agent: 'orchestrator', maxIterations: 5, signal: new AbortController().signal },
+      'sys',
+      history
+    )
+    // caller merges newMessages into history; the user message must NOT come back again
+    const users = res.newMessages.filter((m) => m.role === 'user')
+    expect(users).toHaveLength(0)
+    expect(res.newMessages.filter((m) => m.role === 'tool')).toHaveLength(1)
+    expect(res.newMessages.at(-1)).toEqual({ role: 'assistant', content: 'done' })
+  })
+
+  it('preserves partial learnings on abort (stop keeps file reads)', async () => {
+    const controller = new AbortController()
+    const chat = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        return { content: '', toolCalls: [{ id: 'r1', name: 'read_file', args: { path: 'big.ts' } }] }
+      })
+      .mockImplementationOnce(async () => {
+        controller.abort() // user hits Stop during the second call
+        throw new Error('The operation was aborted')
+      })
+    const res = await runLoop(
+      { chat: chat as any, tools: noopTools, execute: async () => 'entire file content here', emit, agent: 'orchestrator', maxIterations: 5, signal: controller.signal },
+      'sys',
+      [{ role: 'user', content: 'analyze the codebase' }]
+    )
+    expect(res.aborted).toBe(true)
+    // the file read from THIS run survives the abort
+    const toolMsg = res.newMessages.find((m) => m.role === 'tool')
+    expect(toolMsg?.content).toContain('entire file content here')
+  })
+
+  it('preserves partial learnings on a mid-run error', async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({ content: '', toolCalls: [{ id: 'g1', name: 'grep', args: { pattern: 'x' } }] })
+      .mockRejectedValueOnce(new Error('network down'))
+    const res = await runLoop(
+      { chat: chat as any, tools: noopTools, execute: async () => 'match found', emit, agent: 'orchestrator', maxIterations: 5, signal: new AbortController().signal },
+      'sys',
+      [{ role: 'user', content: 'go' }]
+    )
+    expect(res.error).toMatch(/network down/)
+    expect(res.newMessages.find((m) => m.role === 'tool')?.content).toBe('match found')
+  })
 })
 
 describe('OllamaCloudClient error handling', () => {

@@ -130,6 +130,25 @@ export class AgentSession {
       )
       this.history.push(...result.newMessages)
       this.history = compactHistoryBytes(this.history)
+      if (result.aborted || result.error) {
+        // partial run: everything the agent read/learned is in newMessages and
+        // now merged into history — a follow-up prompt continues where this
+        // left off instead of re-reading the workspace from scratch
+        if (this.sessionId && sessionStore.isSessionDbReady()) {
+          sessionStore.appendMessage(this.sessionId, 'assistant', result.aborted
+            ? 'Stopped. Everything read this run is kept in context — continue where I left off.'
+            : `Run error: ${result.error}`)
+        }
+        this.io.emit({
+          type: 'message',
+          role: 'assistant',
+          content: result.aborted
+            ? 'Stopped. I kept everything I read this run — tell me to continue and I will pick up where I left off.'
+            : `Run error: ${result.error}`
+        })
+        this.io.emit({ type: 'run_end', runId, error: result.aborted ? 'aborted' : result.error })
+        return
+      }
       this.io.emit({ type: 'message', role: 'assistant', content: result.content })
       // persist to SQLite + markdown history
       if (this.sessionId && sessionStore.isSessionDbReady()) {

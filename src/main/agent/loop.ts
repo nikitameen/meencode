@@ -20,6 +20,10 @@ export interface LoopResult {
   content: string
   newMessages: AgentMessage[]
   toolCallsMade: number
+  /** set when the run was aborted mid-flight; newMessages holds partial learnings */
+  aborted?: boolean
+  /** set when the run threw; newMessages holds partial learnings gathered so far */
+  error?: string
 }
 
 const HISTORY_TOOL_CAP = 2500
@@ -34,11 +38,12 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
   let toolCallsMade = 0
   const t0 = Date.now()
 
-  for (let i = 0; i < deps.maxIterations; i++) {
-    const res = await deps.chat(messages, deps.tools, deps.signal, {
-      onToken: (t) => deps.emit({ type: 'token', text: t }),
-      onThinking: (t) => deps.emit({ type: 'thinking', text: t })
-    })
+  try {
+    for (let i = 0; i < deps.maxIterations; i++) {
+      const res = await deps.chat(messages, deps.tools, deps.signal, {
+        onToken: (t) => deps.emit({ type: 'token', text: t }),
+        onThinking: (t) => deps.emit({ type: 'thinking', text: t })
+      })
 
     if (res.toolCalls.length > 0) {
       messages.push({
@@ -105,6 +110,18 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
     final = res.content ?? ''
     if (final) messages.push({ role: 'assistant', content: final })
     break
+    }
+  } catch (e: any) {
+    // ABORT or mid-run error: return everything learned so far instead of losing it.
+    // The partial history (file reads, greps, sub-agent findings) is merged by
+    // the caller, so restarting never re-reads the workspace from scratch.
+    return {
+      content: '',
+      newMessages: messages.slice(1 + history.length),
+      toolCallsMade,
+      aborted: deps.signal.aborted,
+      error: e?.message ?? String(e)
+    }
   }
 
   if (!final) {
@@ -112,7 +129,8 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
     messages.push({ role: 'assistant', content: final })
   }
 
-  return { content: final, newMessages: messages.slice(1), toolCallsMade }
+  // messages = [system, ...history, ...newThisRun]; return ONLY this run's messages
+  return { content: final, newMessages: messages.slice(1 + history.length), toolCallsMade }
 }
 
 export function compactHistory(history: AgentMessage[], keep = 30): AgentMessage[] {
