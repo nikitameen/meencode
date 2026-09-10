@@ -1,4 +1,5 @@
 import type { AgentMessage, ToolCall, ToolDef } from '../../shared/agent/types'
+import { proxySafeFetch } from '../proxyFetch'
 
 export type ChatResult = { content: string; toolCalls: ToolCall[] }
 
@@ -36,7 +37,7 @@ export class OllamaCloudClient {
       ...(tools.length > 0 ? { tools: tools.map((t) => ({ type: 'function', function: t })) } : {})
     }
 
-    const res = await fetch(this.url, {
+    const res = await proxySafeFetch(this.url, {
       method: 'POST',
       headers: { Authorization: this.headers.Authorization, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

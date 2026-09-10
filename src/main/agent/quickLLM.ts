@@ -1,4 +1,5 @@
 import type { Settings } from '../../shared/types'
+import { proxySafeFetch } from '../proxyFetch'
 
 export interface CompletionRequest {
   system: string
@@ -13,7 +14,7 @@ export interface CompletionRequest {
  */
 export async function complete(cfg: Settings, req: CompletionRequest, signal?: AbortSignal): Promise<string> {
   const base = cfg.baseUrl.replace(/\/+$/, '')
-  const res = await fetch(`${base}/v1/chat/completions`, {
+  const res = await proxySafeFetch(`${base}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${cfg.apiKey}`,

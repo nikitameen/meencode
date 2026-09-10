@@ -11,6 +11,7 @@ import { registerPtyIPC } from './ptyService'
 import { registerCursorIPC } from './cursorFeatures'
 import { registerImagesIPC } from './imagesIPC'
 import { registerWorkspaceImportIPC } from './workspaceImport'
+import { proxySafeFetch } from './proxyFetch'
 
 const IGNORED = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.meencode', '__pycache__',
@@ -70,12 +71,12 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
     else if (base.endsWith('/v1')) base = base.slice(0, -'/v1'.length)
     if (!/^https?:\/\//.test(base)) base = 'https://' + base
     try {
-      let res = await fetch(base + '/v1/models', {
+      let res = await proxySafeFetch(base + '/v1/models', {
         headers: { Authorization: `Bearer ${s.apiKey}` }
       })
       // fall back to the native Ollama API when the OpenAI-compatible one is absent
       if (res.status === 404) {
-        res = await fetch(base + '/api/tags', {
+        res = await proxySafeFetch(base + '/api/tags', {
           headers: { Authorization: `Bearer ${s.apiKey}` }
         })
       }
