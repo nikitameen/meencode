@@ -8,6 +8,7 @@ import { Toolkit } from './tools'
 import { runLoop, truncate, compactHistory } from './loop'
 import { SUBAGENTS, SPAWN_AGENT_TOOL, orchestratorSystemPrompt, parsePlan, parseVerdict, type SubAgentName } from './subagents'
 import { searchCodebaseIndex } from './codebaseIndexBridge'
+import { buildContextBlock, type IDEContext } from '../agentContext'
 import type { AgentMessage, ToolCall, ToolDef } from '../../shared/agent/types'
 
 /** role-based model routing: cheap roles use the fast model, code roles use the big model */
@@ -57,7 +58,7 @@ export class AgentSession {
 
   // ---------------- run ----------------
 
-  async send(text: string, attachedFile?: string | null, images?: { name: string; dataUrl: string }[]): Promise<void> {
+  async send(text: string, attachedFile?: string | null, images?: { name: string; dataUrl: string }[], ide?: IDEContext | null): Promise<void> {
     const settings = this.io.getSettings()
     if (!this.root) {
       this.io.emit({ type: 'run_start', runId: 'x' })
@@ -82,7 +83,7 @@ export class AgentSession {
     this.toolkit!.runId = runId
     this.io.emit({ type: 'run_start', runId })
 
-    let content = await this.enrichContext(text, attachedFile)
+    let content = await this.enrichContext(text, attachedFile, ide ?? null)
     const userImages = (images ?? []).slice(0, 4)
     if (userImages.length > 0) {
       // vision request: content parts (text + images) per the OpenAI-compatible schema
@@ -138,13 +139,25 @@ export class AgentSession {
 
   // ---------------- context enrichment (@mentions, @codebase, rules) ----------------
 
-  private async enrichContext(text: string, attachedFile?: string | null): Promise<string> {
+  private async enrichContext(text: string, attachedFile?: string | null, ide?: IDEContext | null): Promise<string> {
     let out = text
     const root = this.root!
 
-    // project rules
+    // full auto-context: IDE state, git, workspace memory, relevant code, last failure
     try {
-      for (const name of ['.meencoderules', 'meencoderules.md', '.cursorrules']) {
+      const ctx = buildContextBlock(
+        ide ?? { activeFile: null, openTabs: [] },
+        text
+      )
+      if (ctx) {
+        out += `\n\n${ctx}`
+        this.lastContextBlock = ctx
+      }
+    } catch { /* context assembly must never break a run */ }
+
+    // project rules (Cursor-style), incl. AGENTS.md / CLAUDE.md
+    try {
+      for (const name of ['.meencoderules', 'meencoderules.md', '.cursorrules', 'AGENTS.md', 'CLAUDE.md']) {
         const p = path.join(root, name)
         if (fs.existsSync(p)) {
           out += `\n\n--- Project rules (${name}) ---\n${truncate(await fs.promises.readFile(p, 'utf8'), 4000)}`
@@ -239,7 +252,7 @@ export class AgentSession {
 
   private orchestratorTools(): ToolDef[] {
     if (!this.toolkit) return []
-    const readOnly = this.toolkit.defs.filter((d) => ['list_dir', 'read_file', 'search_files', 'grep', 'run_command'].includes(d.name))
+    const readOnly = this.toolkit.defs.filter((d) => ['list_dir', 'read_file', 'search_files', 'grep', 'search_codebase', 'run_command'].includes(d.name))
     return [...readOnly, SPAWN_AGENT_TOOL]
   }
 
@@ -333,6 +346,12 @@ export class AgentSession {
     if (agentName === 'coder' && this.plan.length > 0) {
       ctx += `\n\nCurrent plan (JSON):\n${JSON.stringify(this.plan)}`
     }
+    // read-only agents get the workspace memory overview too
+    if ((agentName === 'researcher' || agentName === 'planner' || agentName === 'coder') && this.lastContextBlock) {
+      ctx += `\n\n${this.lastContextBlock}`
+    }
     return ctx
   }
+
+  private lastContextBlock = ''
 }

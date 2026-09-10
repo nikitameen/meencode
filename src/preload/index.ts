@@ -54,14 +54,24 @@ const api = {
     removeRoot: (abs: string) => ipcRenderer.invoke('workspace:removeRoot', abs) as Promise<{ ok: boolean; roots: string[] }>
   },
   agent: {
-    send: (text: string, attachedFile?: string | null, images?: { name: string; dataUrl: string }[]) =>
-      ipcRenderer.invoke('agent:send', text, attachedFile, images) as Promise<boolean>,
+    send: (text: string, attachedFile?: string | null, images?: { name: string; dataUrl: string }[], ide?: {
+      activeFile: string | null
+      cursorLine?: number
+      selection?: string
+      openTabs: string[]
+      diagnostics?: { path: string; line: number; severity: string; message: string }[]
+    }) =>
+      ipcRenderer.invoke('agent:send', text, attachedFile, images, ide) as Promise<boolean>,
     stop: () => ipcRenderer.invoke('agent:stop') as Promise<boolean>,
     approve: (id: string, ok: boolean) => ipcRenderer.invoke('agent:approve', id, ok) as Promise<boolean>,
     reset: () => ipcRenderer.invoke('agent:reset') as Promise<boolean>,
     revert: (path: string) => ipcRenderer.invoke('agent:revert', path) as Promise<boolean>,
     revertAll: () => ipcRenderer.invoke('agent:revertAll') as Promise<number>,
     onEvent: (cb: EventCb<AgentEvent>) => subscribe('agent:event', cb)
+  },
+  index: {
+    stats: () => ipcRenderer.invoke('index:stats') as Promise<{ ready: boolean; indexing: boolean; files: number; lines: number; symbols: number }>,
+    onEvent: (cb: EventCb<{ phase: string; pct?: number; rootName?: string; filesDone?: number; totalFiles?: number }>) => subscribe('index:event', cb)
   },
   exec: {
     run: (command: string) => ipcRenderer.invoke('exec:run', command) as Promise<string>,

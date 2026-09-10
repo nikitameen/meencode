@@ -4,6 +4,8 @@ import os from 'node:os'
 import { spawn } from 'node:child_process'
 import type { FileChange, ChangeKind } from '../../shared/types'
 import type { ToolDef, ToolCall, ToolCallContext } from '../../shared/agent/types'
+import { searchCodebaseIndex } from './codebaseIndexBridge'
+import { recordFailedCommand } from '../agentContext'
 
 const IGNORED = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.meencode', '__pycache__',
@@ -114,6 +116,15 @@ export class Toolkit {
           properties: { command: { type: 'string' }, timeout_ms: { type: 'number', description: 'Default 120000, max 300000' } },
           required: ['command']
         }
+      },
+      {
+        name: 'search_codebase',
+        description: 'Semantic-ish keyword search over the pre-built workspace index. Much faster than grep for finding where a concept lives. Returns path:line: text.',
+        parameters: {
+          type: 'object',
+          properties: { query: { type: 'string', description: 'Keywords to search for' }, limit: { type: 'number', description: 'Max results (default 25, max 60)' } },
+          required: ['query']
+        }
       }
     ]
   }
@@ -131,6 +142,7 @@ export class Toolkit {
         case 'search_files': return await this.searchFiles(args.pattern)
         case 'grep': return await this.grep(args.pattern, args.include)
         case 'run_command': return await this.runCommand(String(args.command ?? ''), args.timeout_ms, ctx)
+        case 'search_codebase': return this.searchCodebase(String(args.query ?? ''), args.limit)
         default: return `Error: unknown tool "${name}"`
       }
     } catch (e: any) {
@@ -386,6 +398,7 @@ export class Toolkit {
       })
     })
     const cap = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '\n[... truncated]' : s)
+    if (code !== 0) recordFailedCommand(command, `${out}\n${err}`)
     return [
       killed ? `TIMED OUT after ${timeout}ms (killed)` : `Exit code: ${code}`,
       `--- stdout ---\n${cap(out, 12000)}`,
@@ -394,6 +407,14 @@ export class Toolkit {
   }
 
   // ---------- change recording / checkpoints ----------
+
+  private searchCodebase(query: string, limit?: number): string {
+    const q = query.trim()
+    if (!q) return 'Error: query is required'
+    const hits = searchCodebaseIndex(q, Math.min(Number(limit) || 25, 60))
+    if (hits.length === 0) return `No index hits for "${q}". The index may be empty — fall back to grep.`
+    return `Index hits (${hits.length}) for "${q}":\n${hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n')}`
+  }
 
   private async record(abs: string, kind: ChangeKind, before: string | null, after: string | null) {
     const rel = this.toPosix(abs)

@@ -11,6 +11,9 @@ export function StatusBar() {
   const set = useStore((s) => s.set)
   const approvals = useStore((s) => s.approvalsPending)
   const workspace = useStore((s) => s.settings?.workspace)
+  const indexing = useStore((s) => s.indexing)
+  const indexPct = useStore((s) => s.indexPct)
+  const indexStats = useStore((s) => s.indexStats)
   const [git, setGit] = useState<GitState | null>(null)
   const autocomplete = useStore((s) => s.autocompleteEnabled)
   const [theme, setThemeName] = useState(getTheme())
@@ -52,6 +55,15 @@ export function StatusBar() {
             {wsName}
           </button>
         )}
+        {indexing ? (
+          <span className="status-approval" title={`Indexing workspace (${indexPct}%)`}>
+            <Icon name="search" size={11} /> Indexing {indexPct}%
+          </span>
+        ) : indexStats && indexStats.files > 0 ? (
+          <span className="status-btn" title={`Workspace index: ${indexStats.files} files, ${indexStats.lines} lines, ${indexStats.symbols} symbols`}>
+            <Icon name="search" size={11} /> {indexStats.files} indexed
+          </span>
+        ) : null}
         {git?.repo && (
           <span className="status-btn git-indicator" title={`${git.files.length} changed · ${git.branch}`}>
             <Icon name="git" size={11} /> {git.branch}

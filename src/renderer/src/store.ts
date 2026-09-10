@@ -45,6 +45,10 @@ interface State {
   searchHits: { path: string; line: number; text: string; score: number }[]
   searchBusy: boolean
   autocompleteEnabled: boolean
+  indexing: boolean
+  indexPct: number
+  indexRootName: string | null
+  indexStats: { files: number; lines: number; symbols: number } | null
 }
 
 interface Actions {
@@ -99,6 +103,10 @@ export const useStore = create<State & Actions>((set, get) => ({
   searchHits: [],
   searchBusy: false,
   autocompleteEnabled: true,
+  indexing: false,
+  indexPct: 0,
+  indexRootName: null,
+  indexStats: null,
 
   set: (key, value) => set({ [key]: value } as any),
 
@@ -107,8 +115,23 @@ export const useStore = create<State & Actions>((set, get) => ({
     set({ settings })
     if (settings.workspace) {
       await get().refreshTree()
-      void window.meencode.cursor.indexCodebase().catch(() => {})
     }
+    // auto-indexing runs in the main process on init; subscribe to its progress
+    window.meencode.index.onEvent((e) => {
+      const s = get()
+      if (e.phase === 'start') set({ indexing: true, indexPct: 0, indexRootName: null })
+      else if (e.phase === 'progress') {
+        set({ indexing: true, indexPct: e.pct ?? 0, indexRootName: (e as any).rootName ?? null })
+      } else if (e.phase === 'done') {
+        const st = (e as any).stats
+        set({
+          indexing: false,
+          indexPct: 100,
+          indexStats: st ? { files: st.files, lines: st.lines, symbols: st.symbols } : null
+        })
+      } else if (e.phase === 'error') set({ indexing: false })
+      void s
+    })
   },
 
   async refreshTree() {
@@ -337,7 +360,8 @@ export const useStore = create<State & Actions>((set, get) => ({
     if (!text.trim()) return
     const attached = attachCurrent && s.activeTab ? s.activeTab : null
     set({ feed: [...s.feed, { id: uid(), kind: 'user', text }], currentAssistantId: null })
-    await window.meencode.agent.send(text, attached, images)
+    const ide = collectIdeContext()
+    await window.meencode.agent.send(text, attached, images, ide)
   },
 
   async revertChange(path) {
@@ -436,4 +460,51 @@ export function setActiveEditor(editor: unknown): void {
 
 export function getActiveEditor(): any {
   return activeEditor
+}
+
+// ---------------- IDE context for the agent ----------------
+
+/** Snapshot of what the user is looking at — sent with every agent message. */
+function collectIdeContext(): {
+  activeFile: string | null
+  cursorLine?: number
+  selection?: string
+  openTabs: string[]
+  diagnostics?: { path: string; line: number; severity: string; message: string }[]
+} {
+  const s = useStore.getState()
+  const ed = getActiveEditor()
+  const out: {
+    activeFile: string | null
+    cursorLine?: number
+    selection?: string
+    openTabs: string[]
+    diagnostics?: { path: string; line: number; severity: string; message: string }[]
+  } = { activeFile: s.activeTab, openTabs: s.tabs.map((t: Tab) => t.path) }
+  try {
+    if (ed && s.activeTab) {
+      const selection = ed.getSelection()
+      const model = ed.getModel()
+      if (selection && model) {
+        out.cursorLine = selection.positionLineNumber ?? 1
+        const sel = model.getValueInRange(selection)
+        if (sel && sel.trim()) out.selection = sel.slice(0, 2000)
+      }
+      // monaco typescript markers = current "problems"
+      const mon = (window as any).monaco
+      if (mon?.editor?.getModelMarkers) {
+        const markers = mon.editor.getModelMarkers({ resource: model.uri })
+        out.diagnostics = markers
+          .filter((m: any) => m.severity >= 4)
+          .slice(0, 15)
+          .map((m: any) => ({
+            path: s.activeTab!,
+            line: m.startLineNumber,
+            severity: m.severity === 8 ? 'error' : 'warning',
+            message: String(m.message ?? '').slice(0, 200)
+          }))
+      }
+    }
+  } catch { /* editor not ready */ }
+  return out
 }

@@ -37,6 +37,20 @@ export function searchCodebaseIndex(query: string, limit = 40): { path: string; 
   return hits.slice(0, limit)
 }
 
+/** true when the query is specific enough for retrieval (not "fix this" chatter) */
+export function isQueryableText(query: string): boolean {
+  const words = query.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOP_WORDS.has(w))
+  return words.length >= 2
+}
+
+const STOP_WORDS = new Set([
+  'the', 'and', 'for', 'you', 'your', 'this', 'that', 'with', 'what', 'when', 'how', 'why',
+  'can', 'could', 'should', 'would', 'make', 'made', 'does', 'did', 'done', 'have', 'has',
+  'please', 'need', 'want', 'about', 'into', 'from', 'are', 'was', 'were', 'will', 'there',
+  'then', 'than', 'them', 'they', 'its', 'just', 'now', 'get', 'got', 'use', 'using', 'add',
+  'fix', 'fixing', 'change', 'update', 'refactor', 'look', 'see', 'try', 'like', 'some'
+])
+
 export function indexRoot(root: string): { files: number; lines: number } {
   const entries: IndexEntry[] = []
   const IGNORED = new Set([

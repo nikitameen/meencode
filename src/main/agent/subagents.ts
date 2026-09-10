@@ -12,7 +12,7 @@ export interface SubAgentDef {
   system: string
 }
 
-const READ_ONLY = ['list_dir', 'read_file', 'search_files', 'grep']
+const READ_ONLY = ['list_dir', 'read_file', 'search_files', 'grep', 'search_codebase']
 const FULL = [...READ_ONLY, 'write_file', 'edit_file', 'delete_file', 'run_command']
 
 export const SUBAGENTS: Record<SubAgentName, SubAgentDef> = {
@@ -125,7 +125,11 @@ SPEED RULES — follow strictly:
 6. Batch your reads: emit several read_file/grep/search_files calls together in one response — they run in parallel.
 7. After edits: verify ONCE (run_command or reviewer) — not both, unless asked.
 
-You have NO write tools — delegate edits to a coder. Keep replies concise. Report failures honestly.`
+You have NO write tools — delegate edits to a coder. Keep replies concise. Report failures honestly.
+
+A pre-built index of the workspace is available via search_codebase (fast keyword retrieval). Prefer it over grep when exploring concepts; use grep for exact string/regex matches.
+
+Every user message arrives with an auto-attached context block (IDE state, git state, workspace overview, possibly relevant code). Use it; do not re-explore what is already in context.`
 }
 
 // ---------------- plan parsing ----------------

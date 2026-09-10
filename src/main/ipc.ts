@@ -12,6 +12,8 @@ import { registerCursorIPC } from './cursorFeatures'
 import { registerImagesIPC } from './imagesIPC'
 import { registerWorkspaceImportIPC } from './workspaceImport'
 import { proxySafeFetch } from './proxyFetch'
+import { bindIndexWindow, autoIndex, isIndexing } from './indexingService'
+import { memory } from './workspaceMemory'
 
 const IGNORED = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.meencode', '__pycache__',
@@ -26,6 +28,7 @@ let watchDebounce: NodeJS.Timeout | null = null
 export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSession): void {
   win = mainWindow
   session = agentSession
+  bindIndexWindow(mainWindow)
   restartWatchers()
   registerGitIPC(mainWindow)
   registerPtyIPC(mainWindow)
@@ -34,6 +37,7 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
   registerImagesIPC(mainWindow)
 
   applyWorkspaceToSession()
+  void autoIndex()
 
   // ---------- window / app ----------
   ipcMain.handle('win:minimize', () => win.minimize())
@@ -58,6 +62,7 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
     const s = updateSettings(patch)
     applyWorkspaceToSession()
     restartWatchers()
+    if (patch.roots !== undefined) void autoIndex(true)
     return s
   })
 
@@ -105,6 +110,7 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
     const s = addRoots(r.filePaths)
     applyWorkspaceToSession()
     restartWatchers()
+    void autoIndex()
     return { ok: true, added: r.filePaths, roots: s.roots }
   })
 
@@ -112,10 +118,19 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
     const s = removeRoot(abs)
     applyWorkspaceToSession()
     restartWatchers()
+    void autoIndex(true)
     return { ok: true, roots: s.roots }
   })
 
   ipcMain.handle('workspace:roots', () => getSettings().roots)
+
+  ipcMain.handle('index:stats', () => ({
+    ready: memory.ready,
+    indexing: isIndexing(),
+    files: memory.stats?.files ?? 0,
+    lines: memory.stats?.lines ?? 0,
+    symbols: memory.stats?.symbols ?? 0
+  }))
 
   ipcMain.handle('fs:openFolder', async () => {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
@@ -124,6 +139,7 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
     const s = updateSettings({ roots: [r.filePaths[0]], workspace: r.filePaths[0] })
     applyWorkspaceToSession()
     restartWatchers()
+    void autoIndex(true)
     return s.roots[0]
   })
 
@@ -180,8 +196,14 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
   })
 
   // ---------- agent ----------
-  ipcMain.handle('agent:send', (_e, text: string, attachedFile?: string | null, images?: { name: string; dataUrl: string }[]) => {
-    void session.send(text, attachedFile ?? null, images)
+  ipcMain.handle('agent:send', (_e, text: string, attachedFile?: string | null, images?: { name: string; dataUrl: string }[], ide?: {
+    activeFile: string | null
+    cursorLine?: number
+    selection?: string
+    openTabs: string[]
+    diagnostics?: { path: string; line: number; severity: string; message: string }[]
+  }) => {
+    void session.send(text, attachedFile ?? null, images, ide ?? null)
     return true
   })
   ipcMain.handle('agent:stop', () => { session.stop(); return true })
