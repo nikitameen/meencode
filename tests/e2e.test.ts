@@ -46,7 +46,8 @@ describe('E2E structural verification (built app)', () => {
       'checkpoints:list', 'checkpoints:restore',
       'agent:send', 'agent:stop', 'agent:approve', 'agent:revert', 'agent:revertAll',
       'fs:tree', 'fs:read', 'fs:write', 'fs:create', 'fs:remove', 'fs:rename', 'fs:openFolder',
-      'exec:run', 'settings:get', 'settings:update', 'win:zoom'
+      'exec:run', 'settings:get', 'settings:update', 'win:zoom',
+      'models:list'
     ]
     for (const ch of channels) {
       expect(main.includes(ch), `main bundle missing channel: ${ch}`).toBe(true)

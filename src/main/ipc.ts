@@ -60,6 +60,33 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
     return s
   })
 
+  // ---------- models ----------
+  ipcMain.handle('models:list', async () => {
+    const s = getSettings()
+    if (!s.apiKey) return { ok: false, models: [] as string[], error: 'Add your Ollama Cloud API key first.' }
+    try {
+      let base = s.baseUrl.replace(/\/+$/, '')
+      if (base.endsWith('/v1/chat/completions')) base = base.slice(0, -'/chat/completions'.length)
+      else if (base.endsWith('/v1')) base = base.slice(0, -'/v1'.length)
+      const res = await fetch(base + '/v1/models', {
+        headers: { Authorization: `Bearer ${s.apiKey}` }
+      })
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, models: [] as string[], error: 'Invalid or missing Ollama Cloud API key. Add your key in Settings.' }
+      }
+      if (!res.ok) {
+        const t = await res.text().catch(() => '')
+        return { ok: false, models: [] as string[], error: `Ollama Cloud error ${res.status}: ${t.slice(0, 200)}` }
+      }
+      const j = (await res.json()) as { data?: { id?: string; name?: string; model?: string }[]; models?: { id?: string; name?: string; model?: string }[] }
+      const list = j.data ?? j.models ?? []
+      const models = [...new Set(list.map((m) => m.id ?? m.name ?? m.model).filter((x): x is string => typeof x === 'string'))].sort()
+      return { ok: true, models, error: null }
+    } catch (e) {
+      return { ok: false, models: [] as string[], error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
   // ---------- multi-root workspace ----------
   ipcMain.handle('workspace:addFolders', async () => {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'multiSelections'] })
