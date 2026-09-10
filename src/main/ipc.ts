@@ -64,13 +64,21 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
   ipcMain.handle('models:list', async () => {
     const s = getSettings()
     if (!s.apiKey) return { ok: false, models: [] as string[], error: 'Add your Ollama Cloud API key first.' }
+    let base = s.baseUrl.trim().replace(/\/+$/, '')
+    if (base.endsWith('/v1/chat/completions')) base = base.slice(0, -'/v1/chat/completions'.length)
+    else if (base.endsWith('/chat/completions')) base = base.slice(0, -'/chat/completions'.length)
+    else if (base.endsWith('/v1')) base = base.slice(0, -'/v1'.length)
+    if (!/^https?:\/\//.test(base)) base = 'https://' + base
     try {
-      let base = s.baseUrl.replace(/\/+$/, '')
-      if (base.endsWith('/v1/chat/completions')) base = base.slice(0, -'/chat/completions'.length)
-      else if (base.endsWith('/v1')) base = base.slice(0, -'/v1'.length)
-      const res = await fetch(base + '/v1/models', {
+      let res = await fetch(base + '/v1/models', {
         headers: { Authorization: `Bearer ${s.apiKey}` }
       })
+      // fall back to the native Ollama API when the OpenAI-compatible one is absent
+      if (res.status === 404) {
+        res = await fetch(base + '/api/tags', {
+          headers: { Authorization: `Bearer ${s.apiKey}` }
+        })
+      }
       if (res.status === 401 || res.status === 403) {
         return { ok: false, models: [] as string[], error: 'Invalid or missing Ollama Cloud API key. Add your key in Settings.' }
       }
@@ -83,7 +91,9 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
       const models = [...new Set(list.map((m) => m.id ?? m.name ?? m.model).filter((x): x is string => typeof x === 'string'))].sort()
       return { ok: true, models, error: null }
     } catch (e) {
-      return { ok: false, models: [] as string[], error: e instanceof Error ? e.message : String(e) }
+      const msg = e instanceof Error ? e.message : String(e)
+      const cause = (e as { cause?: { message?: string } })?.cause?.message
+      return { ok: false, models: [] as string[], error: cause ? `${msg} (${cause})` : msg }
     }
   })
 
