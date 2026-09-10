@@ -6,6 +6,8 @@ import type { FileChange, ChangeKind } from '../../shared/types'
 import type { ToolDef, ToolCall, ToolCallContext } from '../../shared/agent/types'
 import { searchCodebaseIndex } from './codebaseIndexBridge'
 import { recordFailedCommand } from '../agentContext'
+import { semanticSearch } from '../semanticSearch'
+import { getSettings } from '../settingsStore'
 
 const IGNORED = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.meencode', '__pycache__',
@@ -142,7 +144,11 @@ export class Toolkit {
         case 'search_files': return await this.searchFiles(args.pattern)
         case 'grep': return await this.grep(args.pattern, args.include)
         case 'run_command': return await this.runCommand(String(args.command ?? ''), args.timeout_ms, ctx)
-        case 'search_codebase': return this.searchCodebase(String(args.query ?? ''), args.limit)
+        case 'search_codebase': {
+          const r = this.searchCodebase(String(args.query ?? ''), args.limit)
+          if (typeof r === 'string') return r
+          return await this.semanticFallback(r.q.slice(0, 300), r.limit)
+        }
         default: return `Error: unknown tool "${name}"`
       }
     } catch (e: any) {
@@ -408,12 +414,23 @@ export class Toolkit {
 
   // ---------- change recording / checkpoints ----------
 
-  private searchCodebase(query: string, limit?: number): string {
+  private searchCodebase(query: string, limit?: number): string | { semantic: true; q: string; limit: number } {
     const q = query.trim()
     if (!q) return 'Error: query is required'
     const hits = searchCodebaseIndex(q, Math.min(Number(limit) || 25, 60))
-    if (hits.length === 0) return `No index hits for "${q}". The index may be empty — fall back to grep.`
-    return `Index hits (${hits.length}) for "${q}":\n${hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n')}`
+    if (hits.length > 0) {
+      return `Index hits (${hits.length}) for "${q}":\n${hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n')}`
+    }
+    // thin keyword results -> semantic expansion
+    return { semantic: true, q, limit: Math.min(Number(limit) || 25, 60) }
+  }
+
+  private async semanticFallback(q: string, limit: number): Promise<string> {
+    const s = getSettings()
+    if (!s.apiKey) return `No index hits for "${q}". The index may be empty — fall back to grep.`
+    const hits = await semanticSearch(q, { apiKey: s.apiKey, baseUrl: s.baseUrl, fastModel: s.fastModel }, limit)
+    if (hits.length === 0) return `No hits (keyword or semantic) for "${q}". Fall back to grep.`
+    return `Semantic search results (${hits.length}) for "${q}":\n${hits.map((h) => `${h.path}:${h.line} (via ${h.via}): ${h.text}`).join('\n')}`
   }
 
   private async record(abs: string, kind: ChangeKind, before: string | null, after: string | null) {

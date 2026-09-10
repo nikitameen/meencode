@@ -176,3 +176,8 @@ export function pruneSessions(): void {
 export function isSessionDbReady(): boolean {
   return db != null
 }
+
+/** raw handle for other stores (e.g. semantic search cache) to attach tables. */
+export function getDb(): import('sql.js').Database | null {
+  return db
+}
