@@ -259,6 +259,95 @@ function countFiles(roots: string[]): number {
 
 // ---------------- persistent memory file ----------------
 
+/** Stamp used to detect stale memory (regenerated when older than this). */
+const MEMORY_STALE_MS = 24 * 60 * 60 * 1000
+
+export function isMemoryStale(): boolean {
+  const primary = memory.roots[0]
+  if (!primary) return false
+  try {
+    const p = path.join(primary, '.meencode', 'memory.md')
+    if (!fs.existsSync(p)) return true
+    return Date.now() - fs.statSync(p).mtimeMs > MEMORY_STALE_MS
+  } catch {
+    return true
+  }
+}
+
+/**
+ * LLM-enriched memory: ask the fast model to write a compact project
+ * understanding (stack, architecture, conventions) from the file tree and
+ * a sample of key files. Appends to the deterministic memory.md.
+ */
+export async function enrichMemoryWithLLM(cfg: { apiKey: string; baseUrl: string; fastModel?: string }): Promise<string | null> {
+  const primary = memory.roots[0]
+  if (!primary || !cfg.apiKey) return null
+  try {
+    // gather the prompt material: tree + top symbols + a few key file heads
+    const overview = buildMemoryMarkdown(memory.stats ?? { roots: memory.roots, files: 0, lines: 0, symbols: 0, ms: 0, memoryPath: null })
+    const keyFiles = pickKeyFiles(primary)
+    const samples = keyFiles
+      .map((rel) => {
+        try {
+          const raw = fs.readFileSync(path.join(primary, rel), 'utf8')
+          return `--- ${rel} (first 60 lines) ---\n${raw.split('\n').slice(0, 60).join('\n')}`
+        } catch { return '' }
+      })
+      .filter(Boolean)
+      .slice(0, 6)
+      .join('\n\n')
+
+    const { complete, stripReasoning } = await import('./agent/quickLLM')
+    const raw = await complete(
+      { apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, model: cfg.fastModel ?? '', fastModel: cfg.fastModel ?? '' } as any,
+      {
+        system: 'You analyze codebases and write a compact project brief for a coding agent. Reply in plain markdown, max 40 lines. No code fences, no preamble.',
+        user: `Write a project brief for this workspace.\nSections: Purpose, Tech stack, Architecture (how the main parts connect), Conventions (naming/style/patterns to follow), Build & test commands (if visible in configs), Danger zones (fragile code).\nBase it ONLY on the provided material.\n\nFile overview:\n${overview.slice(0, 2500)}\n\nKey file samples:\n${samples.slice(0, 6000)}`,
+        maxTokens: 1200,
+        temperature: 0.2
+      }
+    )
+    const brief = stripReasoning(raw).trim()
+    if (!brief) return null
+
+    // append under a marker so the deterministic part can be regenerated independently
+    const dir = path.join(primary, '.meencode')
+    fs.mkdirSync(dir, { recursive: true })
+    const p = path.join(dir, 'memory.md')
+    let prev = ''
+    try { prev = fs.readFileSync(p, 'utf8') } catch { /* fresh */ }
+    const marker = '<!-- llm-brief -->'
+    const base = prev.includes(marker) ? prev.slice(0, prev.indexOf(marker)).trimEnd() : prev.trimEnd()
+    fs.writeFileSync(p, `${base}\n\n${marker}\n\n# Project brief (LLM-generated)\n\n${brief}\n`)
+    return p
+  } catch {
+    return null
+  }
+}
+
+/** Heuristic key files: configs, entry points, README. */
+function pickKeyFiles(root: string): string[] {
+  const preferred = [
+    'package.json', 'README.md', 'src/main/index.ts', 'src/index.ts', 'index.ts',
+    'src/main.ts', 'main.ts', 'src/app.ts', 'app.ts', 'pyproject.toml', 'Cargo.toml',
+    'go.mod', 'requirements.txt', 'src/renderer/src/App.tsx'
+  ]
+  const out: string[] = []
+  for (const rel of preferred) {
+    if (out.length >= 8) break
+    if (fs.existsSync(path.join(root, rel))) out.push(rel)
+  }
+  // add the largest few indexed source files for architecture hints
+  const bySize = [...new Set(entries.map((e) => e.path))]
+    .filter((p) => /\.(ts|tsx|js|py|go|rs)$/.test(p))
+    .slice(0, 30)
+  for (const rel of bySize) {
+    if (out.length >= 8) break
+    if (!out.includes(rel) && fs.existsSync(path.join(root, rel))) out.push(rel)
+  }
+  return out
+}
+
 /** Write .meencode/memory.md describing the workspace. Returns its path or null. */
 export function writeMemoryFile(stats: MemoryStats): string | null {
   const primary = memory.roots[0]

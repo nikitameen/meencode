@@ -4,7 +4,7 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { indexWorkspace, findSymbol, retrieveRelevant, buildMemoryMarkdown, memory, writeMemoryFile, updateFile, dropFile, appendHistory, readRecentHistory } from '../src/main/workspaceMemory'
+import { indexWorkspace, findSymbol, retrieveRelevant, buildMemoryMarkdown, memory, writeMemoryFile, updateFile, dropFile, appendHistory, readRecentHistory, isMemoryStale } from '../src/main/workspaceMemory'
 import { setIndex, searchCodebaseIndex } from '../src/main/agent/codebaseIndexBridge'
 
 let tmp = ''
@@ -132,5 +132,18 @@ describe('workspace memory / auto-context', () => {
     appendHistory('second task', 'done too')
     const hist2 = readRecentHistory()
     expect(hist2!).toContain('second task')
+  })
+
+  it('detects stale memory and regenerates on demand', async () => {
+    // memory.md was just written by earlier tests — not stale
+    expect(isMemoryStale()).toBe(false)
+    // age it artificially
+    const p = path.join(tmp, '.meencode', 'memory.md')
+    const past = new Date(Date.now() - 48 * 60 * 60 * 1000)
+    fs.utimesSync(p, past, past)
+    expect(isMemoryStale()).toBe(true)
+    // full re-index rewrites it — fresh again
+    await indexWorkspace([tmp])
+    expect(isMemoryStale()).toBe(false)
   })
 })
