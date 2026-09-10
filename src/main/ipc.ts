@@ -23,7 +23,6 @@ const IGNORED = new Set([
 let session: AgentSession
 let win: BrowserWindow
 let watchers: fs.FSWatcher[] = []
-let watchDebounce: NodeJS.Timeout | null = null
 
 export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSession): void {
   win = mainWindow
@@ -316,27 +315,20 @@ function restartWatchers(): void {
   }
   watchers = []
   pendingChanges.clear()
+  if (indexFlushTimer) clearTimeout(indexFlushTimer)
+  indexFlushTimer = null
   const roots = getSettings().roots
   for (const root of roots) {
     try {
       const w = fs.watch(path.resolve(root), { recursive: true }, (event, filename) => {
         const p = filename ? path.resolve(root, String(filename)) : path.resolve(root)
         pendingChanges.add(p)
-        if (watchDebounce) clearTimeout(watchDebounce)
-        watchDebounce = setTimeout(() => {
-          const changed = [...pendingChanges]
-          pendingChanges.clear()
-          for (const abs of changed) {
-            win?.webContents?.send('fs:changed', { path: abs, root })
-            // live index update (ignore .meencode internals and ignored dirs)
-            const segs = abs.slice(path.resolve(root).length).split(path.sep)
-            if (segs.some((s) => IGNORED.has(s))) continue
-            try {
-              if (fs.existsSync(abs) && fs.statSync(abs).isFile()) updateFile(abs)
-              else if (!fs.existsSync(abs)) dropFile(abs)
-            } catch { /* transient */ }
-          }
-        }, 300)
+        // debounce the whole flush (UI refresh + index update) — one pass per burst
+        if (indexFlushTimer) clearTimeout(indexFlushTimer)
+        indexFlushTimer = setTimeout(() => {
+          indexFlushTimer = null
+          void flushPendingChanges(root)
+        }, 400)
       })
       w.on('error', () => { /* ignore */ })
       watchers.push(w)
@@ -345,3 +337,25 @@ function restartWatchers(): void {
 }
 
 const pendingChanges = new Set<string>()
+let indexFlushTimer: NodeJS.Timeout | null = null
+
+/** One pass per change burst: notify UI + live index refresh (async, non-blocking). */
+async function flushPendingChanges(root: string): Promise<void> {
+  const changed = [...pendingChanges]
+  pendingChanges.clear()
+  for (const abs of changed) {
+    win?.webContents?.send('fs:changed', { path: abs, root })
+  }
+  // live index update — only for files, ignore .meencode internals and ignored dirs
+  for (const abs of changed) {
+    const segs = abs.slice(path.resolve(root).length).split(path.sep)
+    if (segs.some((s) => IGNORED.has(s))) continue
+    try {
+      const st = await fs.promises.stat(abs).catch(() => null)
+      if (st?.isFile()) updateFile(abs)
+      else if (!st) dropFile(abs)
+    } catch { /* transient */ }
+    // yield between files so the main thread stays responsive
+    await new Promise((r) => setTimeout(r, 0))
+  }
+}

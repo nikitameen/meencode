@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type { AgentEvent, FileChange, PlanStep, Settings } from '../../shared/types'
 import { OllamaCloudClient } from './ollamaClient'
 import { Toolkit } from './tools'
-import { runLoop, truncate, compactHistory } from './loop'
+import { runLoop, truncate, compactHistoryBytes } from './loop'
 import { SUBAGENTS, SPAWN_AGENT_TOOL, orchestratorSystemPrompt, parsePlan, parseVerdict, type SubAgentName } from './subagents'
 import { searchCodebaseIndex } from './codebaseIndexBridge'
 import { buildContextBlock, type IDEContext } from '../agentContext'
@@ -84,21 +84,20 @@ export class AgentSession {
     this.toolkit!.runId = runId
     this.io.emit({ type: 'run_start', runId })
 
-    let content = await this.enrichContext(text, attachedFile, ide ?? null)
-    const userImages = (images ?? []).slice(0, 4)
-    if (userImages.length > 0) {
-      // vision request: content parts (text + images) per the OpenAI-compatible schema
-      const parts: unknown[] = [{ type: 'text', text: content }]
-      for (const img of userImages) {
-        parts.push({ type: 'image_url', image_url: { url: img.dataUrl } })
-      }
-      this.history.push({ role: 'user', content: parts as unknown as string })
-      content = '[images attached]'
-    } else {
-      this.history.push({ role: 'user', content })
-    }
-
     try {
+      let content = await this.enrichContext(text, attachedFile, ide ?? null)
+      const userImages = (images ?? []).slice(0, 4)
+      if (userImages.length > 0) {
+        // vision request: content parts (text + images) per the OpenAI-compatible schema
+        const parts: unknown[] = [{ type: 'text', text: content }]
+        for (const img of userImages) {
+          parts.push({ type: 'image_url', image_url: { url: img.dataUrl } })
+        }
+        this.history.push({ role: 'user', content: parts as unknown as string })
+        content = '[images attached]'
+      } else {
+        this.history.push({ role: 'user', content })
+      }
       const result = await runLoop(
         {
           chat: (msgs, tools, signal, cb) =>
@@ -118,7 +117,7 @@ export class AgentSession {
         this.history
       )
       this.history.push(...result.newMessages)
-      this.history = compactHistory(this.history)
+      this.history = compactHistoryBytes(this.history)
       this.io.emit({ type: 'message', role: 'assistant', content: result.content })
       // persist the exchange so future sessions start with context
       try { appendHistory(text, result.content) } catch { /* best-effort */ }

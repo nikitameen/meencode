@@ -119,3 +119,51 @@ export function compactHistory(history: AgentMessage[], keep = 30): AgentMessage
   if (history.length <= keep) return history
   return history.slice(history.length - keep)
 }
+
+/**
+ * Byte-bounded compaction: keeps recent messages, and strips bulky context
+ * blocks (--- ... ---) from OLD user messages — they are re-injected fresh
+ * on every new message anyway. Prevents multi-hundred-KB payloads that hang
+ * the chat after many prompts.
+ */
+export function compactHistoryBytes(history: AgentMessage[], keep = 30, maxChars = 60000): AgentMessage[] {
+  let h = history.slice(-keep)
+  // strip context blocks from all but the newest user message
+  const lastUserIdx = (() => {
+    for (let i = h.length - 1; i >= 0; i--) if (h[i].role === 'user') return i
+    return -1
+  })()
+  h = h.map((m, i) => {
+    if (m.role !== 'user' || i === lastUserIdx) return m
+    const content = typeof m.content === 'string' ? m.content : m.content
+    if (typeof content !== 'string') return m
+    const stripped = content.replace(/\n\n--- [^\n]*---\n[\s\S]*$/g, '\n\n[context from that turn omitted]')
+    return { ...m, content: stripped }
+  })
+  // hard byte cap: drop oldest messages until under budget,
+  // but never drop the newest user turn (it carries this turn's context)
+  const size = (m: AgentMessage): number =>
+    (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length) +
+    (('tool_calls' in m && m.tool_calls) ? JSON.stringify(m.tool_calls).length : 0)
+  let total = h.reduce((n, m) => n + size(m), 0)
+  const newestUserIdx = h.reduce((acc, m, i) => (m.role === 'user' ? i : acc), -1)
+  while (total > maxChars && h.length > 2) {
+    // stop dropping if the next drop would eat the newest user turn
+    if (h.length - 1 <= newestUserIdx) break
+    total -= size(h[0])
+    h = h.slice(1)
+  }
+  // still over budget? truncate bulky non-user messages in place (oldest first)
+  if (total > maxChars) {
+    h = h.map((m) => {
+      if (m.role === 'user' || total <= maxChars) return m
+      const MARKER = '\n[...truncated]'
+      const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')
+      const budgetForThis = Math.max(200, content.length - (total - maxChars) - MARKER.length)
+      const kept = content.slice(0, budgetForThis) + MARKER
+      total -= content.length - kept.length
+      return { ...m, content: kept }
+    })
+  }
+  return h
+}

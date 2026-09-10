@@ -63,15 +63,16 @@ export function buildContextBlock(ide: IDEContext, userText: string): string {
       const memPath = path.join(primary, '.meencode', 'memory.md')
       if (fs.existsSync(memPath)) {
         const raw = fs.readFileSync(memPath, 'utf8')
-        // only the overview + symbols — keep it under 3k
-        parts.push(`--- Workspace memory (auto-generated overview) ---\n${raw.slice(0, 3000)}`)
+        // deterministic overview only (the LLM brief is large and lives in its own file)
+        const overview = raw.includes('<!-- llm-brief -->') ? raw.slice(0, raw.indexOf('<!-- llm-brief -->')) : raw
+        parts.push(`--- Workspace memory (auto-generated overview) ---\n${overview.slice(0, 2500)}`)
       }
     } catch { /* ignore */ }
   }
 
   // ---- auto-retrieval: relevant code for this message ----
   if (memory.ready && isQueryableText(userText)) {
-    const hits = retrieveRelevant(userText, 10)
+    const hits = retrieveRelevant(userText, 6)
     if (hits.length > 0) {
       const block = hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n')
       parts.push(`--- Possibly relevant code (keyword match on your message) ---\n${block}`)
@@ -79,12 +80,12 @@ export function buildContextBlock(ide: IDEContext, userText: string): string {
   }
 
   // ---- persistent session history (context across restarts) ----
-  const hist = readRecentHistory()
+  const hist = readRecentHistory(2000)
   if (hist) parts.push(`--- Recent session history (previous conversations, oldest first) ---\n${hist}`)
 
   // ---- last failed command ----
   if (lastFailedCommand && Date.now() - lastFailedCommand.ts < 30 * 60 * 1000) {
-    parts.push(`--- Last failed command (${new Date(lastFailedCommand.ts).toLocaleTimeString()}) ---\n$ ${lastFailedCommand.command}\n${lastFailedCommand.output.slice(-2000)}`)
+    parts.push(`--- Last failed command (${new Date(lastFailedCommand.ts).toLocaleTimeString()}) ---\n$ ${lastFailedCommand.command}\n${lastFailedCommand.output.slice(-1200)}`)
   }
 
   return parts.length > 0 ? parts.join('\n\n') : ''

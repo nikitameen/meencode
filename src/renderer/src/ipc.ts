@@ -8,6 +8,8 @@ declare global {
 }
 
 let initialized = false
+let fsFlushTimer: number | null = null
+const fsPending = new Set<string>()
 
 export function initBridge(): void {
   if (initialized) return
@@ -26,15 +28,27 @@ export function initBridge(): void {
       })
     }
   })
-  window.meencode.fsEvents.on(async ({ path }) => {
-    const s = store.getState()
-    await s.refreshTree()
-    // reload open, non-dirty tabs touched by the change
-    for (const t of s.tabs) {
-      if (!t.dirty && (path.endsWith(t.path) || path.replace(/\\/g, '/').endsWith('/' + t.path))) {
-        await s.reloadFile(t.path)
+  window.meencode.fsEvents.on(({ path }) => {
+    // batch bursts of changes into ONE tree refresh
+    fsPending.add(path)
+    if (fsFlushTimer != null) window.clearTimeout(fsFlushTimer)
+    fsFlushTimer = window.setTimeout(async () => {
+      fsFlushTimer = null
+      const changed = [...fsPending]
+      fsPending.clear()
+      const s = store.getState()
+      // single tree refresh per burst (no await per event)
+      void s.refreshTree()
+      // reload open, non-dirty tabs touched by the burst
+      const touched = new Set<string>()
+      for (const p of changed) {
+        for (const t of s.tabs) {
+          if (t.dirty || touched.has(t.path)) continue
+          if (p.endsWith(t.path) || p.replace(/\\/g, '/').endsWith('/' + t.path)) touched.add(t.path)
+        }
       }
-    }
+      for (const tp of touched) await s.reloadFile(tp)
+    }, 400)
   })
 }
 
