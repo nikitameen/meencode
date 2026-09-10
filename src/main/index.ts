@@ -7,6 +7,7 @@ import { AgentSession } from './agent/orchestrator'
 import { disposeAllPty } from './ptyService'
 import { initSessionDb, pruneSessions, getDb } from './sessionStore'
 import { bindSearchCache } from './semanticSearch'
+import { ensureKnowledge } from './knowledgeStore'
 
 function loadDotEnv(): void {
   try {

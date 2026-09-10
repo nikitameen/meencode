@@ -411,6 +411,12 @@ a { color: var(--accent); cursor: pointer; }
 .terminal-input-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border); }
 .terminal-prompt { color: var(--green); font-family: var(--font-mono); font-size: 12px; }
 .terminal-input-row input { flex: 1; background: none; border: none; padding: 0; font-family: var(--font-mono); font-size: 12px; }
+.terminal-newshell-btn {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px;
+  border-radius: 6px; border: 1px solid var(--border-light); background: var(--bg2);
+  color: var(--dim); font-size: 11px; cursor: pointer; white-space: nowrap;
+}
+.terminal-newshell-btn:hover { color: var(--fg); border-color: var(--accent); }
 
 /* ---------------- status bar ---------------- */
 .status-bar {

@@ -172,16 +172,9 @@ export class AgentSession {
       }
     } catch { /* context assembly must never break a run */ }
 
-    // project rules (Cursor-style), incl. AGENTS.md / CLAUDE.md
-    try {
-      for (const name of ['.meencoderules', 'meencoderules.md', '.cursorrules', 'AGENTS.md', 'CLAUDE.md']) {
-        const p = path.join(root, name)
-        if (fs.existsSync(p)) {
-          out += `\n\n--- Project rules (${name}) ---\n${truncate(await fs.promises.readFile(p, 'utf8'), 4000)}`
-          break
-        }
-      }
-    } catch { /* ignore */ }
+    // NOTE: project rules / AGENTS.md / CLAUDE.md are injected by the knowledge
+    // base (agentContext.buildContextBlock) — seeded from those files and
+    // managed in SQLite. No file reads here anymore.
 
     // @file mentions
     const mentions = [...text.matchAll(/@([\w./-]+\.[\w]+)/g)].map((m) => m[1])

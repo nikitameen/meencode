@@ -450,7 +450,10 @@ export const useStore = create<State & Actions>((set, get) => ({
   },
 
   toggleTerminal() {
-    set({ terminalOpen: !get().terminalOpen })
+    const open = !get().terminalOpen
+    set({ terminalOpen: open })
+    // opening the terminal with no shell yet -> start one automatically
+    if (open) document.dispatchEvent(new CustomEvent('meencode:ensure-shell'))
   },
   toggleChat() {
     set({ chatOpen: !get().chatOpen })

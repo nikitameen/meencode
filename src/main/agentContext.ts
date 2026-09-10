@@ -6,6 +6,7 @@ import path from 'node:path'
 import { isRepo, stateFor, logFor } from './gitCore'
 import { memory, retrieveRelevant, readRecentHistory } from './workspaceMemory'
 import { isQueryableText } from './agent/codebaseIndexBridge'
+import { buildKnowledgeBlock } from './knowledgeStore'
 
 export interface IDEContext {
   activeFile: string | null      // scoped path "N:rel"
@@ -24,6 +25,13 @@ export function recordFailedCommand(command: string, output: string): void {
 
 export function buildContextBlock(ide: IDEContext, userText: string): string {
   const parts: string[] = []
+
+  // ---- knowledge base: rules, instructions, skills, snippets (SQLite) ----
+  // takes priority: managed knowledge replaces file-based rules injection
+  try {
+    const kb = buildKnowledgeBlock(memory.roots[0] ?? null)
+    if (kb) parts.push(kb)
+  } catch { /* DB not ready */ }
 
   // ---- IDE state ----
   const ideLines: string[] = []

@@ -28,6 +28,7 @@ export function CommandPalette() {
       { id: 'revert', label: 'Revert All Agent Changes', run: () => void store().revertAll() },
       { id: 'newchat', label: 'Clear Conversation', run: () => store().clearChat() },
       { id: 'terminal', label: 'Toggle Terminal', hint: 'Ctrl+`', run: () => store().toggleTerminal() },
+      { id: 'newshell', label: 'New Terminal (Interactive Shell)', hint: 'run Windows commands manually', run: () => { if (!useStore.getState().terminalOpen) store().toggleTerminal(); document.dispatchEvent(new CustomEvent('meencode:new-shell')) } },
       { id: 'git', label: 'Toggle Git Panel', hint: 'Ctrl+Shift+G', run: () => document.dispatchEvent(new CustomEvent('meencode:view-git')) },
       { id: 'browser', label: 'Toggle Built-in Browser', hint: 'Ctrl+Alt+B', run: () => document.dispatchEvent(new CustomEvent('meencode:toggle-browser')) },
       { id: 'search', label: 'Search Codebase (@codebase)', hint: 'Ctrl+Shift+F', run: () => set('searchOpen', !useStore.getState().searchOpen) },

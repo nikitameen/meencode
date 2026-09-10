@@ -48,13 +48,20 @@ export function TerminalPanel() {
   useEffect(() => {
     const onNewShell = () => void newShell()
     const onSuggest = () => void getSuggestion()
+    const onEnsureShell = () => {
+      // terminal opened with no shell tabs -> start an interactive one
+      if (useStore.getState().terminalOpen && shells.length === 0) void newShell()
+    }
     document.addEventListener('meencode:new-shell', onNewShell)
     document.addEventListener('meencode:suggest-command', onSuggest)
+    document.addEventListener('meencode:ensure-shell', onEnsureShell)
     return () => {
       document.removeEventListener('meencode:new-shell', onNewShell)
       document.removeEventListener('meencode:suggest-command', onSuggest)
+      document.removeEventListener('meencode:ensure-shell', onEnsureShell)
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shells.length])
 
   useEffect(() => {
     const off = window.meencode.pty.onData(({ id, data }) => {
@@ -292,7 +299,12 @@ export function TerminalPanel() {
               setAutoScroll(el.scrollHeight - el.scrollTop - el.clientHeight < 40)
             }}
           >
-            {terminal.length === 0 && <div className="terminal-empty">Agent commands and your commands appear here. Open a real shell with +.</div>}
+            {terminal.length === 0 && (
+              <div className="terminal-empty">
+                Run any Windows command below (one-shot), or press <b>+</b> for a full interactive shell
+                (CMD / PowerShell / Git Bash).
+              </div>
+            )}
             {terminal.map((t) => (
               <div key={t.id} className="terminal-entry">
                 <div className="terminal-entry-header">
@@ -315,7 +327,7 @@ export function TerminalPanel() {
           <div className="terminal-input-row">
             <span className="terminal-prompt">$</span>
             <input
-              placeholder="Run a one-shot command in the workspace…"
+              placeholder="Run any Windows command here (dir, npm test, git status…)"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -323,6 +335,9 @@ export function TerminalPanel() {
                 if (e.key === 'Tab' && suggestion) { e.preventDefault(); applySuggestion() }
               }}
             />
+            <button className="terminal-newshell-btn" title="Open a full interactive shell" onClick={() => void newShell()}>
+              <Icon name="terminal" size={11} /> Shell
+            </button>
             <button className="icon-btn" title="AI: suggest a command" onClick={() => void getSuggestion()}>
               {suggestBusy ? <span className="tool-spinner"><Icon name="spinner" size={11} /></span> : <Icon name="sparkle" size={12} />}
             </button>
