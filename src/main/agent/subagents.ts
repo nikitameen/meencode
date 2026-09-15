@@ -13,7 +13,7 @@ export interface SubAgentDef {
 }
 
 const READ_ONLY = ['list_dir', 'read_file', 'search_files', 'grep', 'search_codebase']
-const FULL = [...READ_ONLY, 'write_file', 'edit_file', 'delete_file', 'run_command']
+const FULL = [...READ_ONLY, 'write_file', 'edit_file', 'delete_file', 'run_command', 'compare_screenshots']
 
 export const SUBAGENTS: Record<SubAgentName, SubAgentDef> = {
   planner: {

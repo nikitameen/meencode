@@ -176,7 +176,20 @@ export class Toolkit {
 
   async execute(name: string, args: any, ctx: ToolCallContext): Promise<string> {
     try {
-      switch (name) {
+      // Accept common aliases the model sometimes uses.
+      const n = String(name ?? '').trim().toLowerCase()
+      const normalized =
+        n === 'listdir' || n === 'list-dir' ? 'list_dir' :
+        n === 'readfile' || n === 'read-file' ? 'read_file' :
+        n === 'writefile' || n === 'write-file' ? 'write_file' :
+        n === 'editfile' || n === 'edit-file' ? 'edit_file' :
+        n === 'deletefile' || n === 'delete-file' ? 'delete_file' :
+        n === 'searchfiles' || n === 'search-files' ? 'search_files' :
+        n === 'searchcodebase' || n === 'search-codebase' || n === 'search_code_base' ? 'search_codebase' :
+        n === 'comparescreenshots' || n === 'compare-screenshots' ? 'compare_screenshots' :
+        n === 'runcmd' || n === 'run-cmd' || n === 'runcommand' ? 'run_command' :
+        n
+      switch (normalized) {
         case 'list_dir': return await this.listDir(String(args.path ?? ''))
         case 'read_file': return await this.readFile(args.path, args.offset, args.limit)
         case 'write_file': return await this.writeFile(args.path, String(args.content ?? ''), ctx)
@@ -186,15 +199,11 @@ export class Toolkit {
         case 'grep': return await this.grep(args.pattern, args.include)
         case 'run_command': return await this.runCommand(String(args.command ?? ''), args.timeout_ms, ctx)
         case 'search_codebase': {
-          const r = this.searchCodebase(String(args.query ?? ''), args.limit)
+          const q = String(args.query ?? '')
+          const limit = Math.min(Number(args.limit) || 25, 60)
+          const r = this.searchCodebase(q, limit)
           if (typeof r === 'string') return r
           return await this.semanticFallback(r.q.slice(0, 300), r.limit)
-        }
-        default: {
-          if (this.defs.some((d) => d.name === name && d.description.startsWith('['))) {
-            return await mcpManager.call(name, args ?? {})
-          }
-          return `Error: unknown tool "${name}"`
         }
         case 'compare_screenshots': {
           const { screenshot_path, reference_path, prompt } = args ?? {}
@@ -205,6 +214,14 @@ export class Toolkit {
             `Differences:\n${result.differences.map((d) => `- ${d}`).join('\n') || '(none)'}`,
             `Recommendations:\n${result.recommendations.map((r) => `- ${r}`).join('\n') || '(none)'}`
           ].join('\n\n')
+        }
+        default: {
+          // MCP tools are registered as "server.name" and their description starts with "[server]".
+          const isMcp = this.defs.some((d) => d.name === normalized && d.description.startsWith('['))
+          if (isMcp) {
+            return await mcpManager.call(normalized, args ?? {})
+          }
+          return `Error: unknown tool "${name}"`
         }
       }
     } catch (e: any) {
