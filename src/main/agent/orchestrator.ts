@@ -37,7 +37,8 @@ export class AgentSession {
   private approvals = new Map<string, (ok: boolean) => void>()
   private sessionId: string | null = null
   private stopRequested = false
-  private runCommandChild: import('node:child_process').ChildProcess | null = null
+  private activeCommands = new Set<import('node:child_process').ChildProcess>()
+  private commandStopHandlers = new Map<import('node:child_process').ChildProcess, () => void>()
   busy = false
   root: string | null = null
   roots: string[] = []
@@ -54,13 +55,20 @@ export class AgentSession {
     this.root = this.roots[0] ?? null
     this.history = []
     this.plan = []
-    if (this.root) {
+      if (this.root) {
       this.toolkit = new Toolkit(this.roots, {
         onFileChange: (c) => this.emit({ type: 'file_change', change: c }),
         onOutput: (id, chunk, stream) => this.emit({ type: 'command_output', id, chunk, stream }),
         approve: (cmd) => this.requestApproval(cmd),
         autoRun: () => this.io.getSettings().autoRunCommands,
-        onCommandSpawn: (child) => { this.runCommandChild = child }
+        onCommandSpawn: (child, onStop) => {
+          this.activeCommands.add(child)
+          this.commandStopHandlers.set(child, onStop)
+        },
+        onCommandClose: (child) => {
+          this.activeCommands.delete(child)
+          this.commandStopHandlers.delete(child)
+        }
       })
     } else {
       this.toolkit = null
@@ -94,6 +102,7 @@ export class AgentSession {
     }
     this.busy = true
     this.clearStop()
+    this.resumeCount = 0
     const controller = new AbortController()
     this.controller = controller
     this.toolkit!.runId = runId
@@ -169,7 +178,7 @@ export class AgentSession {
 
       if (result.hitIterationLimit) {
         // Summarize progress and start a fresh iteration so long tasks can keep going.
-        await this.summarizeAndResume(runId, text, settings)
+        await this.summarizeAndResume(runId, text, settings, result.toolCallsMade)
         return
       }
 
@@ -195,16 +204,45 @@ export class AgentSession {
 
   // ---------------- context summarization + resume ----------------
 
-  private async summarizeAndResume(runId: string, originalText: string, settings: Settings): Promise<void> {
+  private resumeCount = 0
+  private readonly MAX_RESUMES = 2
+
+  private async summarizeAndResume(runId: string, originalText: string, settings: Settings, toolCallsMade: number): Promise<void> {
+    // If the agent hit the iteration limit without taking any actions, it is
+    // probably stuck in an analysis loop or the task is already vague. Do not
+    // auto-resume; ask the user for clarification instead of burning more tokens.
+    if (toolCallsMade === 0) {
+      const note = `I reached the thinking limit without taking any action. Could you clarify or narrow down what you'd like me to do?`
+      this.emit({ type: 'message', role: 'assistant', content: note })
+      if (this.sessionId && sessionStore.isSessionDbReady()) {
+        sessionStore.appendMessage(this.sessionId, 'assistant', note)
+      }
+      this.emit({ type: 'run_end', runId, error: 'iteration-limit-no-progress' })
+      return
+    }
+
+    if (this.resumeCount >= this.MAX_RESUMES) {
+      const note = `I've used several thinking cycles and haven't finished yet. Please check my progress or tell me how to continue.`
+      this.emit({ type: 'message', role: 'assistant', content: note })
+      if (this.sessionId && sessionStore.isSessionDbReady()) {
+        sessionStore.appendMessage(this.sessionId, 'assistant', note)
+      }
+      this.emit({ type: 'run_end', runId, error: 'iteration-limit-resume-capped' })
+      return
+    }
+    this.resumeCount++
+
     const summary = await this.summarizeContext(settings)
     this.emit({ type: 'message', role: 'assistant', content: `Reached the iteration limit for this step. I'm summarizing what was done and continuing with a fresh context.\n\n**Summary so far:**\n${summary}` })
 
-    // Replace history with a compact resume context
+    // Preserve the most recent actual tool results so the resumed agent doesn't
+    // have to re-read the same files. Drop everything older to keep context lean.
+    const recentTail = compactHistoryBytes(this.history.slice(-12), 8, 20000)
     const resumeMessage: AgentMessage = {
       role: 'user',
       content: `Continue the following task from where it left off.\n\nOriginal request:\n${originalText}\n\nSummary of progress so far:\n${summary}\n\nContinue working toward the goal. Do not repeat steps already completed unless verification is needed.`
     }
-    this.history = compactHistory([resumeMessage], 4)
+    this.history = compactHistory([...recentTail, resumeMessage], 10)
 
     const newRunId = randomUUID().slice(0, 8)
     this.toolkit!.runId = newRunId
@@ -293,20 +331,24 @@ Do not include greetings or explanations outside the bullet points.`
   stop() {
     this.stopRequested = true
     this.controller?.abort()
-    if (this.runCommandChild) {
-      try { this.runCommandChild.kill('SIGTERM') } catch { /* ignore */ }
-      try {
-        // force-kill after a short grace period if still running
-        setTimeout(() => {
-          try { this.runCommandChild?.kill('SIGKILL') } catch { /* ignore */ }
-        }, 500)
-      } catch { /* ignore */ }
+    for (const [child, onStop] of this.commandStopHandlers) {
+      try { onStop() } catch { /* ignore */ }
     }
+    // Fallback for any child without a registered stop handler
+    for (const child of this.activeCommands) {
+      try { child.kill('SIGTERM') } catch { /* ignore */ }
+    }
+    setTimeout(() => {
+      for (const child of this.activeCommands) {
+        try { if (child.exitCode === null) child.kill('SIGKILL') } catch { /* ignore */ }
+      }
+    }, 500)
   }
 
   private clearStop() {
     this.stopRequested = false
-    this.runCommandChild = null
+    this.activeCommands.clear()
+    this.commandStopHandlers.clear()
   }
 
   // ---------------- context enrichment (@mentions, @codebase, rules) ----------------

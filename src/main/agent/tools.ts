@@ -26,7 +26,8 @@ export interface ToolkitHooks {
   onOutput(id: string, chunk: string, stream: 'stdout' | 'stderr'): void
   approve(command: string): Promise<boolean>
   autoRun(): boolean
-  onCommandSpawn?(child: import('node:child_process').ChildProcess): void
+  onCommandSpawn?(child: import('node:child_process').ChildProcess, onStop: () => void): void
+  onCommandClose?(child: import('node:child_process').ChildProcess): void
 }
 
 export class Toolkit {
@@ -429,10 +430,14 @@ export class Toolkit {
       cwd: this.root,
       env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' }
     })
-    this.hooks.onCommandSpawn?.(child)
+    this.hooks.onCommandSpawn?.(child, () => {
+      stopped = true
+      this.stopCommand(child)
+    })
     let out = ''
     let err = ''
     let killed = false
+    let stopped = false
     child.stdout?.on('data', (d: Buffer) => {
       const s = d.toString()
       out += s
@@ -446,25 +451,43 @@ export class Toolkit {
     const code = await new Promise<number | null>((resolve) => {
       const timer = setTimeout(() => {
         killed = true
-        child.kill()
+        this.stopCommand(child)
         resolve(null)
       }, timeout)
       child.on('close', (c) => {
         clearTimeout(timer)
+        this.hooks.onCommandClose?.(child)
         resolve(c)
       })
       child.on('error', () => {
         clearTimeout(timer)
+        this.hooks.onCommandClose?.(child)
         resolve(null)
       })
     })
     const cap = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '\n[... truncated]' : s)
     if (code !== 0) recordFailedCommand(command, `${out}\n${err}`)
+    if (stopped) return `STOPPED by user.\n--- stdout ---\n${cap(out, 12000)}\n--- stderr ---\n${cap(err, 8000)}`
     return [
       killed ? `TIMED OUT after ${timeout}ms (killed)` : `Exit code: ${code}`,
       `--- stdout ---\n${cap(out, 12000)}`,
       `--- stderr ---\n${cap(err, 8000)}`
     ].join('\n')
+  }
+
+  private stopCommand(child: import('node:child_process').ChildProcess): void {
+    if (!child || child.killed || child.exitCode !== null) return
+    const isWin = process.platform === 'win32'
+    if (isWin && child.pid) {
+      try {
+        // /T kills the whole process tree, /F forces it
+        spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' })
+      } catch { /* ignore */ }
+    }
+    try { child.kill('SIGTERM') } catch { /* ignore */ }
+    setTimeout(() => {
+      try { if (child.exitCode === null) child.kill('SIGKILL') } catch { /* ignore */ }
+    }, 300)
   }
 
   // ---------- change recording / checkpoints ----------
