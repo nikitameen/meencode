@@ -17,6 +17,8 @@ export interface LoopDeps {
   maxIterations: number
   signal: AbortSignal
   shouldStop?(): boolean
+  /** return true when the agent's final text is a real completion; false / undefined forces another turn */
+  isComplete?(finalText: string, toolCallsMade: number): boolean
 }
 
 export interface LoopResult {
@@ -134,11 +136,18 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
 
     final = res.content ?? ''
     if (final) messages.push({ role: 'assistant', content: final })
-    // If the assistant returned a final message but also asked the user what to do,
-    // it has not finished the task. Force another turn by continuing the loop.
-    const asksToStop = /\b(should I continue|do you want me to proceed|shall I continue|want me to continue|what do you think|is this what you wanted|should I go on|need me to continue)\b/i.test(final)
-    if (asksToStop) continue
-    break
+
+    // Decide whether the agent has actually finished the task or is just pausing.
+    const looksIncomplete =
+      !final ||
+      /\b(should I continue|do you want me to proceed|shall I continue|want me to continue|what do you think|is this what you wanted|should I go on|need me to continue)\b/i.test(final) ||
+      /\b(I will|I shall|I need to|I should|next I|next, I|next step|then I|after that|first I|second I|finally I|let me|I am going to)\b/i.test(final) ||
+      /\b(plan|steps?|todo|to do next|remaining|not yet|incomplete|pending|unfinished)\b/i.test(final)
+    const complete = deps.isComplete?.(final, toolCallsMade) ?? !looksIncomplete
+    if (complete) break
+    // Continue looping; append a gentle nudge so the model knows to keep going.
+    messages.push({ role: 'user', content: 'Continue and complete the task. Do not ask me whether to proceed.' })
+    continue
     }
   } catch (e: any) {
     // ABORT or mid-run error: return everything learned so far instead of losing it.
@@ -227,11 +236,11 @@ function dropStaleReads(messages: AgentMessage[]): void {
   if (messages.length <= 10) return
   let removed = 0
   // start after system (0) + a small tail budget; stop before the last few messages
-  for (let i = 2; i < messages.length - 6 && removed < 4; i++) {
+  for (let i = 2; i < messages.length - 8 && removed < 2; i++) {
     const m = messages[i]
     if (m.role === 'tool' && READ_TOOLS.has(m.name ?? '')) {
-      if (m.content.length > 1200) {
-        m.content = m.content.slice(0, 800) + '\n[...older read result truncated to save context]'
+      if (m.content.length > 2500) {
+        m.content = m.content.slice(0, 1800) + '\n[...older read result truncated to save context]'
         removed++
       }
     }

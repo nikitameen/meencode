@@ -154,7 +154,8 @@ export class AgentSession {
           agent: 'orchestrator',
           maxIterations: settings.maxIterations,
           signal: controller.signal,
-          shouldStop: () => this.stopRequested
+          shouldStop: () => this.stopRequested,
+          isComplete: (finalText, toolCallsMade) => this.isRunComplete(finalText, toolCallsMade)
         },
         this.buildSystemPrompt(),
         this.history
@@ -354,6 +355,22 @@ Do not include greetings or explanations outside the bullet points.`
     const learned = buildLearningBlock(this.root ?? null)
     if (!learned) return base
     return `${base}\n\n${learned}`
+  }
+
+  private isRunComplete(finalText: string, toolCallsMade: number): boolean {
+    // If we generated a plan and it is not fully done, the run is not complete.
+    const pendingPlan = this.plan.length > 0 && this.plan.some((p) => p.status !== 'done')
+    if (pendingPlan) {
+      // If the final text is just a summary of progress, keep going.
+      const isProgressSummary = /\b(progress so far|summary|completed:|done:|status|step [\d]+)\b/i.test(finalText)
+      if (isProgressSummary) return false
+      // If the final text mentions the plan, keep going.
+      const planMentioned = /\b(plan|steps?|step)\b/i.test(finalText)
+      if (planMentioned) return false
+    }
+    // Default to the loop's own heuristics by returning true only when there is
+    // a non-empty final answer and no active plan.
+    return finalText.length > 0 && !pendingPlan
   }
 
   reset() {
