@@ -178,17 +178,19 @@ export class Toolkit {
     if (!this.toolkitReady()) return `Error: toolkit not initialized (no workspace root set)`
     try {
       // Accept common aliases the model sometimes uses.
-      const n = String(name ?? '').trim().toLowerCase()
+      let n = String(name ?? '').trim().toLowerCase()
+      // Some models prefix tool names with namespaces or suffixes.
+      n = n.replace(/^functions\./, '').replace(/:\d+$/, '')
       const normalized =
-        n === 'listdir' || n === 'list-dir' ? 'list_dir' :
-        n === 'readfile' || n === 'read-file' ? 'read_file' :
-        n === 'writefile' || n === 'write-file' ? 'write_file' :
-        n === 'editfile' || n === 'edit-file' ? 'edit_file' :
-        n === 'deletefile' || n === 'delete-file' ? 'delete_file' :
-        n === 'searchfiles' || n === 'search-files' ? 'search_files' :
-        n === 'searchcodebase' || n === 'search-codebase' || n === 'search_code_base' ? 'search_codebase' :
+        n === 'listdir' || n === 'list-dir' || n === 'ls' ? 'list_dir' :
+        n === 'readfile' || n === 'read-file' || n === 'read' ? 'read_file' :
+        n === 'writefile' || n === 'write-file' || n === 'write' ? 'write_file' :
+        n === 'editfile' || n === 'edit-file' || n === 'edit' ? 'edit_file' :
+        n === 'deletefile' || n === 'delete-file' || n === 'delete' ? 'delete_file' :
+        n === 'searchfiles' || n === 'search-files' || n === 'findfiles' ? 'search_files' :
+        n === 'searchcodebase' || n === 'search-codebase' || n === 'search_code_base' || n === 'codebasesearch' || n === 'codebase_search' ? 'search_codebase' :
         n === 'comparescreenshots' || n === 'compare-screenshots' ? 'compare_screenshots' :
-        n === 'runcmd' || n === 'run-cmd' || n === 'runcommand' ? 'run_command' :
+        n === 'runcmd' || n === 'run-cmd' || n === 'runcommand' || n === 'execute_command' ? 'run_command' :
         n
 
       // If the normalized name is not a built-in, check whether it is a registered
@@ -198,8 +200,9 @@ export class Toolkit {
       if (!BUILT_INS.has(normalized)) {
         const mcp = this.defs.find((d) => d.name === normalized && d.description.startsWith('['))
         if (mcp) return await mcpManager.call(normalized, args ?? {})
-        console.error(`[toolkit] unknown tool called: "${name}" (normalized: "${normalized}") — registered defs: ${this.defs.map((d) => d.name).join(', ')}`)
-        return `Error: unknown tool "${name}"`
+        const registered = this.defs.map((d) => d.name).join(', ')
+        console.error(`[toolkit] unknown tool called: "${name}" (normalized: "${normalized}") — registered defs: ${registered}`)
+        return `Error: unknown tool "${name}" (normalized: "${normalized}"). Registered tools: ${registered}`
       }
 
       switch (normalized) {
