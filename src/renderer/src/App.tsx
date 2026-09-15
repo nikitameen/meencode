@@ -147,7 +147,7 @@ export function App() {
     <div className="app">
       <div className="titlebar">
         <div className="titlebar-left">
-          <span className="logo"><Icon name="sparkle" size={14} /></span>
+          <span className="logo"><Icon name="sparkle" size={13} /></span>
           <span className="app-name">Meencode</span>
         </div>
         <div className="titlebar-center">
@@ -162,13 +162,13 @@ export function App() {
           </button>
           <span className="titlebar-divider" />
           <button className="win-btn" onClick={() => void window.meencode.win.minimize()} title="Minimize">
-            <Icon name="min" size={12} />
+            <Icon name="min" size={14} />
           </button>
-          <button className="win-btn" onClick={() => void window.meencode.win.maximize()} title="Maximize">
-            <Icon name="max" size={11} />
+          <button className="win-btn" onClick={() => void window.meencode.win.maximize()} title="Maximize/Restore">
+            <Icon name="max" size={13} />
           </button>
           <button className="win-btn close" onClick={() => void window.meencode.win.close()} title="Close">
-            <Icon name="close" size={12} />
+            <Icon name="close" size={14} />
           </button>
         </div>
       </div>
