@@ -175,6 +175,7 @@ export class Toolkit {
   // ---------- execution ----------
 
   async execute(name: string, args: any, ctx: ToolCallContext): Promise<string> {
+    if (!this.toolkitReady()) return `Error: toolkit not initialized (no workspace root set)`
     try {
       // Accept common aliases the model sometimes uses.
       const n = String(name ?? '').trim().toLowerCase()
@@ -189,6 +190,18 @@ export class Toolkit {
         n === 'comparescreenshots' || n === 'compare-screenshots' ? 'compare_screenshots' :
         n === 'runcmd' || n === 'run-cmd' || n === 'runcommand' ? 'run_command' :
         n
+
+      // If the normalized name is not a built-in, check whether it is a registered
+      // MCP tool. This prevents "unknown tool" for any tool the agent was actually
+      // given in its tool list.
+      const BUILT_INS = new Set(['list_dir', 'read_file', 'write_file', 'edit_file', 'delete_file', 'search_files', 'grep', 'run_command', 'search_codebase', 'compare_screenshots'])
+      if (!BUILT_INS.has(normalized)) {
+        const mcp = this.defs.find((d) => d.name === normalized && d.description.startsWith('['))
+        if (mcp) return await mcpManager.call(normalized, args ?? {})
+        console.error(`[toolkit] unknown tool called: "${name}" (normalized: "${normalized}") — registered defs: ${this.defs.map((d) => d.name).join(', ')}`)
+        return `Error: unknown tool "${name}"`
+      }
+
       switch (normalized) {
         case 'list_dir': return await this.listDir(String(args.path ?? ''))
         case 'read_file': return await this.readFile(args.path, args.offset, args.limit)
@@ -215,18 +228,16 @@ export class Toolkit {
             `Recommendations:\n${result.recommendations.map((r) => `- ${r}`).join('\n') || '(none)'}`
           ].join('\n\n')
         }
-        default: {
-          // MCP tools are registered as "server.name" and their description starts with "[server]".
-          const isMcp = this.defs.some((d) => d.name === normalized && d.description.startsWith('['))
-          if (isMcp) {
-            return await mcpManager.call(normalized, args ?? {})
-          }
-          return `Error: unknown tool "${name}"`
-        }
       }
+      // should never reach here because BUILT_INS check handles all built-ins
+      return `Error: unknown tool "${name}"`
     } catch (e: any) {
       return `Error: ${e?.message ?? String(e)}`
     }
+  }
+
+  private toolkitReady(): boolean {
+    return this.roots.length > 0 && !!this.root
   }
 
   // ---------- public helpers ----------
