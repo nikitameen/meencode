@@ -6,7 +6,8 @@ import { Icon } from './ui'
 export function ReviewModal() {
   const open = useStore((s) => s.reviewModalOpen)
   const set = useStore((s) => s.set)
-  const changes = useStore((s) => s.changes)
+  const activeSession = useStore((s) => s.sessions.find((x) => x.id === s.activeSessionId) ?? s.sessions[0])
+  const changes = activeSession?.changes ?? []
   const revertChange = useStore((s) => s.revertChange)
   const keepChange = useStore((s) => s.keepChange)
   const [selected, setSelected] = useState<string | null>(null)

@@ -51,6 +51,7 @@ Rules:
 - NEVER add comments unless explicitly asked. NEVER leave placeholders or TODOs.
 - After editing, verify with read_file. If the step includes running commands or tests, use run_command.
 - When done, reply with a concise summary: files changed and what was done.
+- If an edit_file fails because old_string is not found, re-read the file and retry with the exact current text; do not give up.
 
 The working directory is the workspace root; use relative paths.`
   },

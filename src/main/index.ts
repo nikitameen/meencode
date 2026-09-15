@@ -1,12 +1,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, BrowserWindow, shell } from 'electron'
-import { registerIPC, sendAgentEvent } from './ipc'
+import { registerIPC } from './ipc'
 import { loadSettings, getSettings } from './settingsStore'
-import { AgentSession } from './agent/orchestrator'
+import { SessionManager } from './agentSessions'
 import { disposeAllPty } from './ptyService'
 import { initSessionDb, pruneSessions, getDb } from './sessionStore'
-import { bindSearchCache } from './semanticSearch'
 import { ensureKnowledge } from './knowledgeStore'
 
 function loadDotEnv(): void {
@@ -51,14 +50,11 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  const session = new AgentSession({
-    emit: sendAgentEvent,
-    getSettings
-  })
+  const sessions = new SessionManager()
   const settings = getSettings()
-  if (settings.workspace) session.setWorkspace(settings.workspace)
+  if (settings.workspace) sessions.ensureRoots()
 
-  registerIPC(win, session)
+  registerIPC(win, sessions)
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -87,8 +83,6 @@ if (!app.requestSingleInstanceLock()) {
     void initSessionDb()
       .then(() => {
         pruneSessions()
-        const db = getDb()
-        if (db) bindSearchCache(db)
         ensureKnowledge(getSettings().workspace)
       })
       .catch((e) => console.warn('session DB unavailable:', e?.message ?? e))

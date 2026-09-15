@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { BrowserWindow, dialog, ipcMain, shell, clipboard } from 'electron'
 import type { FileNode, Settings } from '../shared/types'
 import { getSettings, updateSettings, addRoots, removeRoot, resolveScoped, toScoped } from './settingsStore'
-import { AgentSession } from './agent/orchestrator'
+import { SessionManager } from './agentSessions'
 import { registerGitIPC } from './gitService'
 import { registerPtyIPC } from './ptyService'
 import { registerCursorIPC } from './cursorFeatures'
@@ -22,22 +22,23 @@ const IGNORED = new Set([
   '.venv', 'venv', '.pytest_cache', '.idea', 'target', '.next'
 ])
 
-let session: AgentSession
+let sessions: SessionManager
 let win: BrowserWindow
 let watchers: fs.FSWatcher[] = []
 
-export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSession): void {
+export function registerIPC(mainWindow: BrowserWindow, sessionManager: SessionManager): void {
   win = mainWindow
-  session = agentSession
+  sessions = sessionManager
+  sessions.bindWindow(mainWindow)
   bindIndexWindow(mainWindow)
   restartWatchers()
   registerGitIPC(mainWindow)
   registerPtyIPC(mainWindow)
   registerWorkspaceImportIPC(mainWindow)
-  registerCursorIPC(mainWindow, agentSession)
+  registerCursorIPC(mainWindow) // cursor features are workspace-scoped, not per-session
   registerImagesIPC(mainWindow)
 
-  applyWorkspaceToSession()
+  applyWorkspaceToSessions()
   void autoIndex()
   // seed knowledge (rules/skills) for the current workspace once the DB is up
   seedKnowledgeWhenReady()
@@ -63,7 +64,7 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
   ipcMain.handle('settings:get', () => getSettings())
   ipcMain.handle('settings:update', (_e, patch: Partial<Settings>) => {
     const s = updateSettings(patch)
-    applyWorkspaceToSession()
+    applyWorkspaceToSessions()
     restartWatchers()
     if (patch.roots !== undefined) void autoIndex(true)
     return s
@@ -111,7 +112,7 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'multiSelections'] })
     if (r.canceled || r.filePaths.length === 0) return { ok: false, added: [] as string[] }
     const s = addRoots(r.filePaths)
-    applyWorkspaceToSession()
+    applyWorkspaceToSessions()
     restartWatchers()
     void autoIndex()
     knowledgeStore.ensureKnowledge(s.roots[0])
@@ -120,7 +121,7 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
 
   ipcMain.handle('workspace:removeRoot', (_e, abs: string) => {
     const s = removeRoot(abs)
-    applyWorkspaceToSession()
+    applyWorkspaceToSessions()
     restartWatchers()
     void autoIndex(true)
     return { ok: true, roots: s.roots }
@@ -165,7 +166,7 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
     if (r.canceled || !r.filePaths[0]) return null
     // "Open Folder" resets to a single-root workspace
     const s = updateSettings({ roots: [r.filePaths[0]], workspace: r.filePaths[0] })
-    applyWorkspaceToSession()
+    applyWorkspaceToSessions()
     restartWatchers()
     void autoIndex(true)
     knowledgeStore.ensureKnowledge(s.roots[0])
@@ -224,39 +225,42 @@ export function registerIPC(mainWindow: BrowserWindow, agentSession: AgentSessio
     return true
   })
 
-  // ---------- agent ----------
+  // ---------- agent sessions (multi, parallel) ----------
   ipcMain.handle('agent:send', (_e, text: string, attachedFile?: string | null, images?: { name: string; dataUrl: string }[], ide?: {
     activeFile: string | null
     cursorLine?: number
     selection?: string
     openTabs: string[]
     diagnostics?: { path: string; line: number; severity: string; message: string }[]
-  }) => {
-    void session.send(text, attachedFile ?? null, images, ide ?? null)
+  }, sessionId?: string | null) => {
+    void sessions.sendTo(sessionId ?? null, text, attachedFile ?? null, images, ide ?? null)
     return true
   })
-  ipcMain.handle('agent:stop', () => { session.stop(); return true })
-  ipcMain.handle('agent:approve', (_e, id: string, ok: boolean) => session.resolveApproval(id, ok))
-  ipcMain.handle('agent:reset', () => { session.reset(); return true })
+  ipcMain.handle('agent:stop', (_e, sessionId: string) => { sessions.stop(sessionId); return true })
+  ipcMain.handle('agent:approve', (_e, sessionId: string, id: string, ok: boolean) => sessions.approve(sessionId, id, ok))
+  ipcMain.handle('agent:reset', (_e, sessionId: string) => { sessions.reset(sessionId); return true })
 
   // ---------- sessions (SQLite) ----------
   ipcMain.handle('sessions:list', () => sessionStore.listSessions())
   ipcMain.handle('sessions:load', (_e, sessionId: string) => {
-    const transcript = session.loadSession(String(sessionId ?? ''))
+    const s = sessions.get(sessionId)
+    if (!s) return { ok: false as const, messages: [] }
+    const transcript = s.loadSession(String(sessionId ?? ''))
     if (!transcript) return { ok: false as const, messages: [] }
     return { ok: true as const, messages: transcript }
   })
   ipcMain.handle('sessions:delete', (_e, sessionId: string) => {
     sessionStore.deleteSession(String(sessionId ?? ''))
+    sessions.delete(sessionId)
     return true
   })
   ipcMain.handle('sessions:rename', (_e, sessionId: string, title: string) => {
     sessionStore.renameSession(String(sessionId ?? ''), String(title ?? ''))
     return true
   })
-  ipcMain.handle('agent:revert', (_e, scoped: string) => session.revert(toLegacyRel(scoped)))
-  ipcMain.handle('agent:revertAll', () => session.revertAll())
-  ipcMain.handle('agent:changes', () => session.getChanges())
+  ipcMain.handle('agent:revert', (_e, sessionId: string, scoped: string) => sessions.revert(sessionId, toLegacyRel(scoped)))
+  ipcMain.handle('agent:revertAll', (_e, sessionId: string) => sessions.revertAll(sessionId))
+  ipcMain.handle('agent:changes', (_e, sessionId: string) => sessions.getChanges(sessionId))
 
   // ---------- terminal ----------
   ipcMain.handle('exec:run', (_e, command: string) => {
@@ -293,10 +297,8 @@ function seedKnowledgeWhenReady(): void {
   trySeed(20) // ~10s max
 }
 
-function applyWorkspaceToSession(): void {
-  const roots = getSettings().roots
-  // the agent sees ALL workspace folders (multi-root)
-  session.setRoots(roots)
+function applyWorkspaceToSessions(): void {
+  sessions.ensureRoots()
 }
 
 /** old-style relative paths ("src/a.ts") are resolved against root 0 for agent compat */

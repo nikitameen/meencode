@@ -3,24 +3,22 @@ import path from 'node:path'
 import { ipcMain } from 'electron'
 import type { BrowserWindow } from 'electron'
 import { getSettings } from './settingsStore'
-import { AgentSession } from './agent/orchestrator'
 import { complete, stripReasoning, extractCodeBlock } from './agent/quickLLM'
-import { indexRoot, searchCodebaseIndex, getIndexedWorkspace, index as indexRef } from './agent/codebaseIndexBridge'
+import { indexRoot, searchCodebaseIndex, getIndexedWorkspace, getFlatIndex } from './agent/codebaseIndexBridge'
 import { buildLocalVocab, isVocabReady, localComplete } from './agent/localComplete'
 
 let win: BrowserWindow
-let session: AgentSession
 
-export function registerCursorIPC(mainWindow: BrowserWindow, agentSession: AgentSession): void {
+export function registerCursorIPC(mainWindow: BrowserWindow): void {
   win = mainWindow
-  session = agentSession
 
   // ---------------- @codebase index ----------------
   ipcMain.handle('codebase:index', async () => {
     const root = getSettings().workspace
     if (!root) return { ok: false, files: 0, lines: 0 }
     if (getIndexedWorkspace() === root) {
-      return { ok: true, files: new Set(indexRef.map((e) => e.path)).size, lines: indexRef.length }
+      const flat = getFlatIndex()
+      return { ok: true, files: new Set(flat.map((e) => e.path)).size, lines: flat.length }
     }
     const r = indexRoot(root)
     buildLocalVocab(root) // tier-1 instant completion vocabulary

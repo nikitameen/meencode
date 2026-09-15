@@ -84,6 +84,9 @@ export function App() {
       } else if (mod && e.altKey && e.key.toLowerCase() === 'h') {
         e.preventDefault()
         useStore.getState().toggleHistory()
+      } else if (mod && e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        useStore.getState().newSession()
       } else if (mod && e.key === '`') {
         e.preventDefault()
         toggleTerminal()

@@ -3,7 +3,7 @@
 // every agent prompt so agents understand the codebase immediately.
 import fs from 'node:fs'
 import path from 'node:path'
-import { searchCodebaseIndex, setIndex, type IndexEntry } from './agent/codebaseIndexBridge'
+import { searchCodebaseIndex, setIndex, updateFile as updateIndexFile, dropFile as dropIndexFile, getFlatIndex, type IndexEntry } from './agent/codebaseIndexBridge'
 
 export interface MemoryStats {
   roots: string[]
@@ -67,14 +67,14 @@ export function updateFile(abs: string): void {
   try {
     // keyword entries
     const fileEntries = safeExtract(abs, path.resolve(memory.roots[rootIdx]))
-    setEntriesFor(abs, fileEntries)
+    updateIndexFile(rel, fileEntries)
     // symbols: drop this file's, re-extract
     memory.symbols = memory.symbols.filter((s) => !(s.root === rootIdx && s.path === rel))
     extractSymbols(abs, path.resolve(memory.roots[rootIdx]), rootIdx)
     // keep stats fresh
     if (memory.stats) {
-      memory.stats.files = new Set(entries.map((e) => e.path)).size
-      memory.stats.lines = entries.length
+      memory.stats.files = indexFileCount()
+      memory.stats.lines = indexLineCount()
       memory.stats.symbols = memory.symbols.length
     }
   } catch { /* unreadable */ }
@@ -82,17 +82,20 @@ export function updateFile(abs: string): void {
 
 /** Remove a file's entries from the shared keyword index (file deleted/renamed). */
 export function dropFile(abs: string): void {
-  setEntriesFor(abs, [])
   const scoped = relOf(abs)
   if (!scoped) return
   const rootIdx = Number(scoped.slice(0, scoped.indexOf(':')))
   const rel = scoped.slice(scoped.indexOf(':') + 1)
+  dropIndexFile(rel)
   memory.symbols = memory.symbols.filter((s) => !(s.root === rootIdx && s.path === rel))
+  if (memory.stats) {
+    memory.stats.files = indexFileCount()
+    memory.stats.lines = indexLineCount()
+    memory.stats.symbols = memory.symbols.length
+  }
 }
 
 // ---------------- multi-root indexing ----------------
-
-let entries: IndexEntry[] = []
 
 function relOf(abs: string): string | null {
   for (let i = 0; i < memory.roots.length; i++) {
@@ -102,6 +105,15 @@ function relOf(abs: string): string | null {
     }
   }
   return null
+}
+
+function indexFileCount(): number {
+  const flat = getFlatIndex()
+  return new Set(flat.map((e) => e.path)).size
+}
+
+function indexLineCount(): number {
+  return getFlatIndex().length
 }
 
 function extractEntries(abs: string, root: string): IndexEntry[] {
@@ -118,20 +130,6 @@ function extractEntries(abs: string, root: string): IndexEntry[] {
   return out
 }
 
-function setEntriesFor(abs: string, newEntries: IndexEntry[]): void {
-  const scoped = relOf(abs)
-  if (!scoped) return
-  const relRoot = scoped.slice(scoped.indexOf(':') + 1)
-  entries = entries.filter((e) => e.path !== relRoot)
-  entries.push(...newEntries)
-  memory.ready = true
-  applyIndex()
-}
-
-function applyIndex(): void {
-  setIndex(entries, memory.roots.join('|') || 'workspace')
-}
-
 /**
  * Full indexing pass over every workspace root. Non-blocking: yields to the
  * event loop between files and reports progress via onProgress.
@@ -142,7 +140,6 @@ export async function indexWorkspace(
 ): Promise<MemoryStats> {
   const t0 = Date.now()
   memory.roots = roots.filter(Boolean)
-  entries = []
   memory.symbols = []
 
   // count files first for progress reporting
@@ -153,7 +150,8 @@ export async function indexWorkspace(
     const root = path.resolve(memory.roots[rootIdx])
     await walkAsync(root, async (abs) => {
       const fileEntries = safeExtract(abs, root)
-      for (const e of fileEntries) entries.push(e)
+      const rel = path.relative(root, abs).split(path.sep).join('/')
+      updateIndexFile(rel, fileEntries)
       extractSymbols(abs, root, rootIdx)
       filesDone++
       if (onProgress && filesDone % 25 === 0) onProgress(filesDone, totalFiles, path.basename(root))
@@ -163,17 +161,17 @@ export async function indexWorkspace(
   }
 
   memory.ready = true
-  const fileSet = new Set(entries.map((e) => e.path))
+  const fileSet = new Set(getFlatIndex().map((e) => e.path))
   const stats: MemoryStats = {
     roots: memory.roots,
     files: fileSet.size,
-    lines: entries.length,
+    lines: indexLineCount(),
     symbols: memory.symbols.length,
     ms: Date.now() - t0,
     memoryPath: null
   }
 
-  applyIndex()
+  setIndex(getFlatIndex(), memory.roots.join('|') || 'workspace')
   stats.memoryPath = writeMemoryFile(stats)
   memory.stats = stats
   return stats
@@ -338,7 +336,7 @@ function pickKeyFiles(root: string): string[] {
     if (fs.existsSync(path.join(root, rel))) out.push(rel)
   }
   // add the largest few indexed source files for architecture hints
-  const bySize = [...new Set(entries.map((e) => e.path))]
+  const bySize = [...new Set(getFlatIndex().map((e) => e.path))]
     .filter((p) => /\.(ts|tsx|js|py|go|rs)$/.test(p))
     .slice(0, 30)
   for (const rel of bySize) {
@@ -487,8 +485,9 @@ export function retrieveRelevant(query: string, limit = 12): { path: string; lin
   // loose: any term matches, scored
   const terms = [...new Set(cleaned.toLowerCase().split(/\s+/).filter((t) => t.length > 2))]
   if (terms.length === 0) return strict
+  const flat = getFlatIndex()
   const scored: { path: string; line: number; text: string; score: number }[] = []
-  for (const e of entries) {
+  for (const e of flat) {
     let score = 0
     for (const t of terms) {
       const at = e.lower.indexOf(t)

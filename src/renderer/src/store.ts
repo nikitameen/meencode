@@ -18,6 +18,20 @@ export type TerminalEntry = { id: string; agent: string; command: string; output
 
 export type ChangeEntry = { change: FileChange; status: 'pending' | 'kept' | 'reverted' }
 
+export type ChatSession = {
+  id: string
+  title: string
+  feed: FeedItem[]
+  changes: ChangeEntry[]
+  terminal: TerminalEntry[]
+  plan: PlanStep[]
+  currentAssistantId: string | null
+  busy: boolean
+  approvalsPending: number
+  createdAt: number
+  updatedAt: number
+}
+
 interface State {
   settings: Settings | null
   tree: FileNode[]
@@ -28,19 +42,17 @@ interface State {
   terminalOpen: boolean
   tabs: Tab[]
   activeTab: string | null
-  feed: FeedItem[]
-  changes: ChangeEntry[]
-  terminal: TerminalEntry[]
-  busy: boolean
-  plan: PlanStep[]
+  sessions: ChatSession[]
+  activeSessionId: string | null
+  /** legacy persisted session list (still loaded from SQLite) */
+  savedSessions: { id: string; title: string; workspace: string | null; createdAt: number; updatedAt: number; messageCount: number; preview: string }[]
+  historyOpen: boolean
   paletteMode: null | 'commands' | 'files'
   settingsModalOpen: boolean
   reviewModalOpen: boolean
   checkpointsModalOpen: boolean
   knowledgeModalOpen: boolean
-  currentAssistantId: string | null
-  approvalsPending: number
-  inlineEdit: import('./components/InlineEdit').InlineEditState
+  inlineEdit: InlineEditState
   searchOpen: boolean
   searchQuery: string
   searchHits: { path: string; line: number; text: string; score: number }[]
@@ -50,9 +62,6 @@ interface State {
   indexPct: number
   indexRootName: string | null
   indexStats: { files: number; lines: number; symbols: number } | null
-  sessions: { id: string; title: string; updatedAt: number; messageCount: number; preview: string }[]
-  activeSessionId: string | null
-  historyOpen: boolean
 }
 
 interface Actions {
@@ -67,22 +76,55 @@ interface Actions {
   refreshTree(): Promise<void>
   openFolder(): Promise<void>
   send(text: string, attachCurrent: boolean, images?: { name: string; dataUrl: string }[]): Promise<void>
+  switchSession(id: string): void
+  newSession(): string
+  closeSession(id: string): void
+  renameSession(id: string, title: string): Promise<void>
+  deleteSavedSession(id: string): Promise<void>
   revertChange(path: string): Promise<void>
   revertAll(): Promise<void>
   keepChange(path: string): void
   approve(id: string, ok: boolean): Promise<void>
+  stop(): void
   clearChat(): void
   set<K extends keyof State>(key: K, value: State[K]): void
   toggleTerminal(): void
   toggleChat(): void
   toggleSidebar(): void
-  refreshSessions(): Promise<void>
-  loadSession(id: string): Promise<void>
-  deleteSession(id: string): Promise<void>
+  refreshSavedSessions(): Promise<void>
+  loadSavedSession(id: string): Promise<void>
   toggleHistory(): void
 }
 
 const uid = (): string => Math.random().toString(36).slice(2, 10)
+
+function makeSession(overrides: Partial<ChatSession> = {}): ChatSession {
+  const now = Date.now()
+  return {
+    id: uid(),
+    title: overrides.title ?? 'New chat',
+    feed: [],
+    changes: [],
+    terminal: [],
+    plan: [],
+    currentAssistantId: null,
+    busy: false,
+    approvalsPending: 0,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides
+  }
+}
+
+function getSession(s: State, id?: string | null): { session: ChatSession; index: number } {
+  const targetId = id ?? s.activeSessionId
+  const index = targetId ? s.sessions.findIndex((x) => x.id === targetId) : -1
+  if (index >= 0) return { session: s.sessions[index], index }
+  // fallback to first session, or create one if none exist
+  if (s.sessions.length > 0) return { session: s.sessions[0], index: 0 }
+  const fresh = makeSession()
+  return { session: fresh, index: 0 }
+}
 
 export const useStore = create<State & Actions>((set, get) => ({
   settings: null,
@@ -94,18 +136,15 @@ export const useStore = create<State & Actions>((set, get) => ({
   terminalOpen: false,
   tabs: [],
   activeTab: null,
-  feed: [],
-  changes: [],
-  terminal: [],
-  busy: false,
-  plan: [],
+  sessions: [makeSession()],
+  activeSessionId: null,
+  savedSessions: [],
+  historyOpen: false,
   paletteMode: null,
   settingsModalOpen: false,
   reviewModalOpen: false,
   checkpointsModalOpen: false,
   knowledgeModalOpen: false,
-  currentAssistantId: null,
-  approvalsPending: 0,
   inlineEdit: INLINE_EMPTY,
   searchOpen: false,
   searchQuery: '',
@@ -116,9 +155,6 @@ export const useStore = create<State & Actions>((set, get) => ({
   indexPct: 0,
   indexRootName: null,
   indexStats: null,
-  sessions: [],
-  activeSessionId: null,
-  historyOpen: false,
 
   set: (key, value) => set({ [key]: value } as any),
 
@@ -154,92 +190,111 @@ export const useStore = create<State & Actions>((set, get) => ({
   async openFolder() {
     const ws = await window.meencode.fs.openFolder()
     if (ws) {
-      set({ tabs: [], activeTab: null, feed: [], changes: [], terminal: [] })
+      set({ tabs: [], activeTab: null, sessions: [makeSession()], activeSessionId: null, savedSessions: [] })
       await get().refreshTree()
     }
   },
 
   handleAgentEvent(e: AgentEvent) {
     const s = get()
+    // identify target session; events without a known session get routed to the active one
+    const sessionId = e.sessionId ?? s.activeSessionId
+    let targetIdx = sessionId ? s.sessions.findIndex((x) => x.id === sessionId) : -1
+    if (targetIdx === -1) {
+      // unknown session id from main: create it lazily (e.g. restored session started elsewhere)
+      const fresh = makeSession({ id: sessionId || uid() })
+      set({ sessions: [...s.sessions, fresh], activeSessionId: fresh.id })
+      targetIdx = s.sessions.length
+    }
+
+    const updateSession = (patch: Partial<ChatSession>) => {
+      set({
+        sessions: get().sessions.map((sess, i) => (i === targetIdx ? { ...sess, ...patch, updatedAt: Date.now() } : sess))
+      })
+    }
+
+    const sess = s.sessions[targetIdx]
+    const feed = sess.feed
+
     switch (e.type) {
       case 'run_start':
-        set({ busy: true, currentAssistantId: null })
+        updateSession({ busy: true, currentAssistantId: null })
         break
       case 'token': {
-        const cur = s.currentAssistantId
+        const cur = sess.currentAssistantId
         if (cur) {
-          set({
-            feed: s.feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: f.text + e.text } : f))
+          updateSession({
+            feed: feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: f.text + e.text } : f))
           })
         } else {
           const id = uid()
-          set({ currentAssistantId: id, feed: [...s.feed, { id, kind: 'assistant', text: e.text, streaming: true }] })
+          updateSession({ currentAssistantId: id, feed: [...feed, { id, kind: 'assistant', text: e.text, streaming: true }] })
         }
         break
       }
       case 'thinking': {
-        let cur = s.currentAssistantId
+        let cur = sess.currentAssistantId
         if (!cur) {
           const id = uid()
-          set({ currentAssistantId: id, feed: [...s.feed, { id, kind: 'assistant', text: '', thinking: '', streaming: true }] })
+          updateSession({ currentAssistantId: id, feed: [...feed, { id, kind: 'assistant', text: '', thinking: '', streaming: true }] })
           cur = id
         }
-        set({
-          feed: get().feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, thinking: (f.thinking ?? '') + e.text } : f))
+        updateSession({
+          feed: get().sessions[targetIdx].feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, thinking: (f.thinking ?? '') + e.text } : f))
         })
         break
       }
       case 'message': {
         if (e.role === 'assistant') {
-          const cur = s.currentAssistantId
-          const exists = cur && s.feed.some((f) => f.id === cur && f.kind === 'assistant')
+          const cur = sess.currentAssistantId
+          const exists = cur && feed.some((f) => f.id === cur && f.kind === 'assistant')
           if (exists) {
-            set({
-              feed: s.feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: e.content, streaming: false } : f))
+            updateSession({
+              feed: feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: e.content, streaming: false } : f))
             })
           } else {
-            set({ feed: [...s.feed, { id: uid(), kind: 'assistant', text: e.content }] })
+            updateSession({ feed: [...feed, { id: uid(), kind: 'assistant', text: e.content }] })
           }
-          set({ currentAssistantId: null })
+          updateSession({ currentAssistantId: null })
         }
         break
       }
       case 'tool_start': {
         const isCmd = e.name === 'run_command'
+        const isMcp = e.name.includes('.')
         const command = isCmd ? String((e.args as any)?.command ?? '') : ''
-        set({
+        updateSession({
           currentAssistantId: null,
           feed: [
-            ...s.feed,
+            ...feed,
             {
               id: e.id,
               kind: 'tool',
               agent: e.agent,
               name: e.name,
-              argsSummary: summarizeArgs(e.name, e.args),
+              argsSummary: summarizeArgs(e.name, e.args, isMcp),
               status: 'running'
             }
           ],
           ...(isCmd
-            ? { terminal: [...s.terminal, { id: e.id, agent: e.agent, command, output: '', exit: null, running: true }] }
+            ? { terminal: [...sess.terminal, { id: e.id, agent: e.agent, command, output: '', exit: null, running: true }] }
             : {})
         })
         break
       }
       case 'tool_end': {
-        set({
-          feed: s.feed.map((f) => (f.id === e.id && f.kind === 'tool' ? { ...f, status: e.ok ? 'ok' : 'error', result: e.result, ms: e.ms } : f)),
-          terminal: s.terminal.map((t) => (t.id === e.id ? { ...t, running: false, exit: e.ok ? t.exit : 1 } : t))
+        updateSession({
+          feed: feed.map((f) => (f.id === e.id && f.kind === 'tool' ? { ...f, status: e.ok ? 'ok' : 'error', result: e.result, ms: e.ms } : f)),
+          terminal: sess.terminal.map((t) => (t.id === e.id ? { ...t, running: false, exit: e.ok ? t.exit : 1 } : t))
         })
         break
       }
       case 'subagent_start':
-        set({ feed: [...s.feed, { id: `sa-${uid()}`, kind: 'subagent', agent: e.agent, task: e.task, state: 'start' }] })
+        updateSession({ feed: [...feed, { id: `sa-${uid()}`, kind: 'subagent', agent: e.agent, task: e.task, state: 'start' }] })
         break
-      case 'subagent_end':
-        set({
-          feed: s.feed.map((f, i, arr) => {
-            // update the last matching start item for this agent
+      case 'subagent_end': {
+        updateSession({
+          feed: feed.map((f, i, arr) => {
             let lastIdx = -1
             for (let j = 0; j < arr.length; j++) {
               const cur = arr[j]
@@ -252,17 +307,18 @@ export const useStore = create<State & Actions>((set, get) => ({
           })
         })
         break
+      }
       case 'plan':
-        set({ feed: [...s.feed, { id: uid(), kind: 'plan', steps: e.steps }], plan: e.steps })
+        updateSession({ feed: [...feed, { id: uid(), kind: 'plan', steps: e.steps }], plan: e.steps })
         break
       case 'plan_update': {
-        set({
-          plan: s.plan.map((p) => (p.id === e.id ? { ...p, status: e.status } : p)),
-          feed: s.feed.map((f) => {
+        updateSession({
+          plan: sess.plan.map((p) => (p.id === e.id ? { ...p, status: e.status } : p)),
+          feed: feed.map((f) => {
             if (f.kind !== 'plan') return f
-            const idx = s.feed.reduce((acc, cur, i) => (cur.kind === 'plan' ? i : acc), -1)
+            const idx = feed.reduce((acc, cur, i) => (cur.kind === 'plan' ? i : acc), -1)
             if (idx === -1) return f
-            const target = s.feed[idx]
+            const target = feed[idx]
             if (target.kind !== 'plan' || target.id !== f.id) return f
             return { ...f, steps: (f as any).steps.map((p: PlanStep) => (p.id === e.id ? { ...p, status: e.status } : p)) }
           })
@@ -271,49 +327,96 @@ export const useStore = create<State & Actions>((set, get) => ({
       }
       case 'file_change': {
         const change = e.change
-        set({
-          changes: [...s.changes.filter((c) => c.change.path !== change.path), { change, status: 'pending' }],
-          feed: [...s.feed, { id: `fc-${uid()}`, kind: 'change', change }]
+        updateSession({
+          changes: [...sess.changes.filter((c) => c.change.path !== change.path), { change, status: 'pending' }],
+          feed: [...feed, { id: `fc-${uid()}`, kind: 'change', change }]
         })
         void get().openFile(change.path)
         break
       }
       case 'command_output': {
-        set({
-          terminal: s.terminal.map((t) => (t.id === e.id ? { ...t, output: (t.output + e.chunk).slice(-20000) } : t))
+        updateSession({
+          terminal: sess.terminal.map((t) => (t.id === e.id ? { ...t, output: (t.output + e.chunk).slice(-20000) } : t))
         })
         break
       }
       case 'approval_request':
-        set({
-          approvalsPending: s.approvalsPending + 1,
-          feed: [...s.feed, { id: e.id, kind: 'approval', command: e.command, state: 'pending' }],
+        updateSession({
+          approvalsPending: sess.approvalsPending + 1,
+          feed: [...feed, { id: e.id, kind: 'approval', command: e.command, state: 'pending' }],
           currentAssistantId: null
         })
         break
       case 'approval_result':
-        set({
-          approvalsPending: Math.max(0, s.approvalsPending - 1),
-          feed: s.feed.map((f) => (f.id === e.id && f.kind === 'approval' ? { ...f, state: e.approved ? 'approved' : 'denied' } : f))
+        updateSession({
+          approvalsPending: Math.max(0, sess.approvalsPending - 1),
+          feed: feed.map((f) => (f.id === e.id && f.kind === 'approval' ? { ...f, state: e.approved ? 'approved' : 'denied' } : f))
         })
         break
-      case 'session_start':
+      case 'session_start': {
+        const title = e.title || sess.title
+        updateSession({ title })
         set({ activeSessionId: e.sessionId })
-        void get().refreshSessions()
+        void get().refreshSavedSessions()
         break
+      }
       case 'run_end': {
-        const feed = [...get().feed]
-        const cur = get().currentAssistantId
+        const currentFeed = [...get().sessions[targetIdx].feed]
+        const cur = get().sessions[targetIdx].currentAssistantId
         if (cur) {
-          const idx = feed.findIndex((f) => f.id === cur)
-          if (idx !== -1 && feed[idx].kind === 'assistant') (feed[idx] as any).streaming = false
+          const idx = currentFeed.findIndex((f) => f.id === cur)
+          if (idx !== -1 && currentFeed[idx].kind === 'assistant') (currentFeed[idx] as any).streaming = false
         }
-        const nextFeed = e.error ? [...feed, { id: uid(), kind: 'error' as const, text: e.error }] : feed
-        set({ busy: false, currentAssistantId: null, feed: nextFeed, approvalsPending: 0 })
-        void get().refreshSessions()
+        const nextFeed = e.error ? [...currentFeed, { id: uid(), kind: 'error' as const, text: e.error }] : currentFeed
+        updateSession({ busy: false, currentAssistantId: null, feed: nextFeed, approvalsPending: 0 })
+        void get().refreshSavedSessions()
         break
       }
     }
+  },
+
+  switchSession(id) {
+    set({ activeSessionId: id })
+  },
+
+  newSession() {
+    const s = get()
+    const fresh = makeSession()
+    set({ sessions: [...s.sessions, fresh], activeSessionId: fresh.id })
+    return fresh.id
+  },
+
+  closeSession(id) {
+    const s = get()
+    const remaining = s.sessions.filter((x) => x.id !== id)
+    if (remaining.length === 0) {
+      const fresh = makeSession()
+      set({ sessions: [fresh], activeSessionId: fresh.id })
+      return
+    }
+    const active = s.activeSessionId === id ? remaining[0].id : s.activeSessionId
+    set({ sessions: remaining, activeSessionId: active })
+  },
+
+  async renameSession(id, title) {
+    try {
+      await window.meencode.sessions.rename(id, title)
+      set({
+        sessions: get().sessions.map((s) => (s.id === id ? { ...s, title, updatedAt: Date.now() } : s)),
+        savedSessions: get().savedSessions.map((s) => (s.id === id ? { ...s, title } : s))
+      })
+    } catch { /* DB not ready */ }
+  },
+
+  async deleteSavedSession(id) {
+    try {
+      await window.meencode.sessions.del(id)
+      if (get().activeSessionId === id) {
+        void window.meencode.agent.reset(id)
+        set({ sessions: get().sessions.filter((s) => s.id !== id), activeSessionId: null })
+      }
+      await get().refreshSavedSessions()
+    } catch { /* DB not ready */ }
   },
 
   async openFile(path) {
@@ -375,48 +478,81 @@ export const useStore = create<State & Actions>((set, get) => ({
   async send(text, attachCurrent, images) {
     const s = get()
     if (!text.trim()) return
+    const { session, index } = getSession(s, s.activeSessionId)
     const attached = attachCurrent && s.activeTab ? s.activeTab : null
-    set({ feed: [...s.feed, { id: uid(), kind: 'user', text }], currentAssistantId: null })
+    const nextFeed: FeedItem[] = [...session.feed, { id: uid(), kind: 'user', text }]
+    set({
+      sessions: s.sessions.map((sess, i) => (i === index ? { ...sess, feed: nextFeed, currentAssistantId: null, updatedAt: Date.now() } : sess))
+    })
     const ide = collectIdeContext()
-    await window.meencode.agent.send(text, attached, images, ide)
+    await window.meencode.agent.send(text, attached, images, ide, session.id)
+  },
+
+  stop() {
+    const s = get()
+    const active = s.activeSessionId
+    if (active) window.meencode.agent.stop(active)
   },
 
   async revertChange(path) {
-    await window.meencode.agent.revert(path)
+    const s = get()
+    const { session } = getSession(s, s.activeSessionId)
+    await window.meencode.agent.revert(session.id, path)
     set({
-      changes: get().changes.map((c) => (c.change.path === path ? { ...c, status: 'reverted' } : c)),
-      feed: get().feed.map((f) => (f.kind === 'change' && f.change.path === path ? { ...f, change: { ...f.change, kind: 'deleted' as const, after: f.change.before, before: f.change.after } } : f))
+      sessions: s.sessions.map((sess) =>
+        sess.id === session.id
+          ? {
+              ...sess,
+              changes: sess.changes.map((c) => (c.change.path === path ? { ...c, status: 'reverted' } : c)),
+              feed: sess.feed.map((f) => (f.kind === 'change' && f.change.path === path ? { ...f, change: { ...f.change, kind: 'deleted' as const, after: f.change.before, before: f.change.after } } : f))
+            }
+          : sess
+      )
     })
     await get().reloadFile(path)
   },
 
   async revertAll() {
-    await window.meencode.agent.revertAll()
-    set({ changes: get().changes.map((c) => ({ ...c, status: 'reverted' as const })) })
-    for (const t of get().tabs) await get().reloadFile(t.path)
+    const s = get()
+    const { session } = getSession(s, s.activeSessionId)
+    await window.meencode.agent.revertAll(session.id)
+    set({
+      sessions: s.sessions.map((sess) => (sess.id === session.id ? { ...sess, changes: sess.changes.map((c) => ({ ...c, status: 'reverted' as const })) } : sess))
+    })
+    for (const t of s.tabs) await get().reloadFile(t.path)
   },
 
   keepChange(path) {
-    set({ changes: get().changes.map((c) => (c.change.path === path ? { ...c, status: 'kept' } : c)) })
+    const s = get()
+    const { session } = getSession(s, s.activeSessionId)
+    set({
+      sessions: s.sessions.map((sess) => (sess.id === session.id ? { ...sess, changes: sess.changes.map((c) => (c.change.path === path ? { ...c, status: 'kept' } : c)) } : sess))
+    })
   },
 
   async approve(id, ok) {
-    await window.meencode.agent.approve(id, ok)
+    const s = get()
+    const active = s.activeSessionId
+    if (active) await window.meencode.agent.approve(active, id, ok)
   },
 
   clearChat() {
-    void window.meencode.agent.reset()
-    set({ feed: [], plan: [], changes: [], terminal: [], activeSessionId: null })
+    const s = get()
+    const { session } = getSession(s, s.activeSessionId)
+    void window.meencode.agent.reset(session.id)
+    set({
+      sessions: s.sessions.map((sess) => (sess.id === session.id ? { ...sess, feed: [], plan: [], changes: [], terminal: [] } : sess))
+    })
   },
 
-  async refreshSessions() {
+  async refreshSavedSessions() {
     try {
-      const sessions = await window.meencode.sessions.list()
-      set({ sessions })
+      const savedSessions = await window.meencode.sessions.list()
+      set({ savedSessions })
     } catch { /* DB not ready */ }
   },
 
-  async loadSession(id) {
+  async loadSavedSession(id) {
     try {
       const r = await window.meencode.sessions.load(id)
       if (!r.ok) return
@@ -425,36 +561,33 @@ export const useStore = create<State & Actions>((set, get) => ({
         if (m.role === 'user') feed.push({ id: uid(), kind: 'user', text: m.content })
         else if (m.role === 'assistant' && m.content.trim()) feed.push({ id: uid(), kind: 'assistant', text: m.content })
       }
-      // strip duplicated context blocks from restored user messages for display
       for (const f of feed) {
-        if (f.kind === 'user') f.text = f.text.replace(/\n\n--- [^\n]*---\n[\s\S]*$/g, '')
+        if (f.kind === 'user') (f as FeedItem & { kind: 'user' }).text = (f as FeedItem & { kind: 'user' }).text.replace(/\n\n--- [^\n]*---\n[\s\S]*$/g, '')
       }
-      set({ feed, plan: [], changes: [], activeSessionId: id, currentAssistantId: null })
-      await get().refreshSessions()
-    } catch { /* DB not ready */ }
-  },
-
-  async deleteSession(id) {
-    try {
-      await window.meencode.sessions.del(id)
-      if (get().activeSessionId === id) {
-        void window.meencode.agent.reset()
-        set({ feed: [], activeSessionId: null })
+      const title = feed.find((f): f is FeedItem & { kind: 'user' } => f.kind === 'user')?.text.slice(0, 80) || 'Restored chat'
+      const existing = get().sessions.find((s) => s.id === id)
+      if (existing) {
+        set({
+          sessions: get().sessions.map((s) => (s.id === id ? { ...s, feed, plan: [], changes: [], currentAssistantId: null, updatedAt: Date.now() } : s)),
+          activeSessionId: id
+        })
+      } else {
+        const restored = makeSession({ id, feed, title })
+        set({ sessions: [...get().sessions, restored], activeSessionId: id })
       }
-      await get().refreshSessions()
+      await get().refreshSavedSessions()
     } catch { /* DB not ready */ }
   },
 
   toggleHistory() {
     const open = !get().historyOpen
     set({ historyOpen: open })
-    if (open) void get().refreshSessions()
+    if (open) void get().refreshSavedSessions()
   },
 
   toggleTerminal() {
     const open = !get().terminalOpen
     set({ terminalOpen: open })
-    // opening the terminal with no shell yet -> start one automatically
     if (open) document.dispatchEvent(new CustomEvent('meencode:ensure-shell'))
   },
   toggleChat() {
@@ -496,7 +629,8 @@ export function languageFor(path: string): string {
   return map[ext] ?? 'plaintext'
 }
 
-function summarizeArgs(name: string, args: unknown): string {
+function summarizeArgs(name: string, args: unknown, isMcp = false): string {
+  if (isMcp) return JSON.stringify(args).slice(0, 160)
   const a = (args ?? {}) as Record<string, unknown>
   switch (name) {
     case 'read_file': return String(a.path ?? '')
@@ -508,7 +642,7 @@ function summarizeArgs(name: string, args: unknown): string {
     case 'grep': return String(a.pattern ?? '')
     case 'run_command': return String(a.command ?? '')
     case 'spawn_agent': return `${a.agent}: ${String(a.task ?? '').slice(0, 80)}`
-    default: return JSON.stringify(a).slice(0, 80)
+    default: return JSON.stringify(a).slice(0, 140)
   }
 }
 
@@ -552,7 +686,6 @@ function collectIdeContext(): {
         const sel = model.getValueInRange(selection)
         if (sel && sel.trim()) out.selection = sel.slice(0, 2000)
       }
-      // monaco typescript markers = current "problems"
       const mon = (window as any).monaco
       if (mon?.editor?.getModelMarkers) {
         const markers = mon.editor.getModelMarkers({ resource: model.uri })

@@ -8,10 +8,12 @@ const DEFAULTS: Settings = {
   baseUrl: 'https://ollama.com',
   model: 'glm-5.3-flash',
   fastModel: 'glm-5.3-flash',
+  subAgentModels: {},
   maxIterations: 30,
   autoRunCommands: false,
   workspace: null,
-  roots: []
+  roots: [],
+  mcpServers: []
 }
 
 let settings: Settings = { ...DEFAULTS }
@@ -42,6 +44,8 @@ function migrate(raw: Record<string, unknown>): Settings {
   const s: Settings = { ...DEFAULTS, ...raw } as Settings
   s.baseUrl = normalizeBaseUrl(s.baseUrl)
   if (!s.fastModel) s.fastModel = s.model
+  if (!s.subAgentModels || typeof s.subAgentModels !== 'object') s.subAgentModels = {}
+  if (!Array.isArray(s.mcpServers)) s.mcpServers = []
   // migrate legacy single workspace -> roots[0]
   let roots = normalizeRoots(raw.roots)
   const legacy = raw.workspace

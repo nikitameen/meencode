@@ -1,20 +1,16 @@
-import fs from 'node:fs'
 import path from 'node:path'
 import { ipcMain, dialog } from 'electron'
 import type { BrowserWindow } from 'electron'
 import { requireRoot } from './ipcHelpers'
+import { resizeImageToBase64 } from './imageResize'
 
 export type ChatImage = { name: string; dataUrl: string; mime: string }
 
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'])
-const MAX_BYTES = 5 * 1024 * 1024
 
 function toDataUrl(abs: string): { name: string; dataUrl: string; mime: string } {
-  const ext = path.extname(abs).slice(1).toLowerCase()
-  const mime = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`
-  const buf = fs.readFileSync(abs)
-  if (buf.length > MAX_BYTES) throw new Error(`${path.basename(abs)} is larger than 5 MB`)
-  return { name: path.basename(abs), dataUrl: `data:${mime};base64,${buf.toString('base64')}`, mime }
+  const { dataUrl, mime } = resizeImageToBase64(abs)
+  return { name: path.basename(abs), dataUrl, mime }
 }
 
 function resolveIn(root: string, p: string): string {

@@ -17,21 +17,43 @@ export type PlanStep = {
   files: string[]
   status: 'pending' | 'in_progress' | 'done' | 'failed'
 }
+export type AgentModelSettings = {
+  model: string
+  fastModel: string
+  /** per-sub-agent model overrides (optional) */
+  subAgentModels?: Partial<Record<'planner' | 'coder' | 'reviewer' | 'debugger' | 'researcher' | 'orchestrator', string>>
+}
+
 export type Settings = {
   apiKey: string
   baseUrl: string
   model: string
   /** small/fast model for planning, research, review, autocomplete (defaults to model) */
   fastModel: string
+  /** per-sub-agent model overrides */
+  subAgentModels?: Partial<Record<'planner' | 'coder' | 'reviewer' | 'debugger' | 'researcher' | 'orchestrator', string>>
   maxIterations: number
   autoRunCommands: boolean
   /** legacy single-root (kept in sync with roots[0]) */
   workspace: string | null
   /** multi-root workspace folders */
   roots: string[]
+  /** MCP servers configured for this workspace */
+  mcpServers?: MCPServerConfig[]
 }
 
-export type AgentEvent =
+export type MCPServerConfig = {
+  id: string
+  name: string
+  command: string
+  args?: string[]
+  env?: Record<string, string>
+  enabled: boolean
+  /** timeout in ms for a single tool call */
+  timeout?: number
+}
+
+type AgentEventBase =
   | { type: 'run_start'; runId: string }
   | { type: 'token'; text: string }
   | { type: 'thinking'; text: string }
@@ -48,5 +70,9 @@ export type AgentEvent =
   | { type: 'approval_result'; id: string; approved: boolean }
   | { type: 'session_start'; sessionId: string; title: string }
   | { type: 'run_end'; runId: string; error?: string }
+
+export type AgentEvent = AgentEventBase & { sessionId: string }
+
+export type AgentEventPayload = AgentEventBase
 
 export type { AgentMessage }

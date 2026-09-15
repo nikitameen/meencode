@@ -12,25 +12,27 @@ function fmtAgo(ts: number): string {
 
 export function SessionHistoryPanel() {
   const open = useStore((s) => s.historyOpen)
-  const sessions = useStore((s) => s.sessions)
+  const savedSessions = useStore((s) => s.savedSessions)
+  const liveSessions = useStore((s) => s.sessions)
   const activeSessionId = useStore((s) => s.activeSessionId)
-  const loadSession = useStore((s) => s.loadSession)
-  const deleteSession = useStore((s) => s.deleteSession)
+  const loadSavedSession = useStore((s) => s.loadSavedSession)
+  const renameSession = useStore((s) => s.renameSession)
+  const deleteSavedSession = useStore((s) => s.deleteSavedSession)
   const toggleHistory = useStore((s) => s.toggleHistory)
-  const refreshSessions = useStore((s) => s.refreshSessions)
+  const refreshSavedSessions = useStore((s) => s.refreshSavedSessions)
   const [query, setQuery] = useState('')
   const [renaming, setRenaming] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
 
   useEffect(() => {
-    if (open) void refreshSessions()
-  }, [open, refreshSessions])
+    if (open) void refreshSavedSessions()
+  }, [open, refreshSavedSessions])
 
   if (!open) return null
 
   const filtered = query.trim()
-    ? sessions.filter((s) => s.title.toLowerCase().includes(query.toLowerCase()) || s.preview.toLowerCase().includes(query.toLowerCase()))
-    : sessions
+    ? savedSessions.filter((s) => s.title.toLowerCase().includes(query.toLowerCase()) || s.preview.toLowerCase().includes(query.toLowerCase()))
+    : savedSessions
 
   return (
     <div className="history-panel">
@@ -50,59 +52,62 @@ export function SessionHistoryPanel() {
       </div>
       <div className="history-list">
         {filtered.length === 0 && <div className="history-empty">No saved sessions yet.</div>}
-        {filtered.map((s) => (
-          <div
-            key={s.id}
-            className={`history-item ${s.id === activeSessionId ? 'active' : ''}`}
-            onClick={() => void loadSession(s.id)}
-          >
-            {renaming === s.id ? (
-              <input
-                autoFocus
-                className="history-rename"
-                value={renameText}
-                onChange={(e) => setRenameText(e.target.value)}
-                onClick={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    void window.meencode.sessions.rename(s.id, renameText).then(() => refreshSessions())
-                    setRenaming(null)
-                  } else if (e.key === 'Escape') setRenaming(null)
-                }}
-              />
-            ) : (
-              <div className="history-item-title">{s.title || 'Untitled chat'}</div>
-            )}
-            <div className="history-item-meta">
-              <span className="history-time">{fmtAgo(s.updatedAt)}</span>
-              <span className="history-count">{s.messageCount} msg</span>
+        {filtered.map((s) => {
+          const live = liveSessions.find((x) => x.id === s.id)
+          return (
+            <div
+              key={s.id}
+              className={`history-item ${s.id === activeSessionId ? 'active' : ''}`}
+              onClick={() => void loadSavedSession(s.id)}
+            >
+              {renaming === s.id ? (
+                <input
+                  autoFocus
+                  className="history-rename"
+                  value={renameText}
+                  onChange={(e) => setRenameText(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      void renameSession(s.id, renameText)
+                      setRenaming(null)
+                    } else if (e.key === 'Escape') setRenaming(null)
+                  }}
+                />
+              ) : (
+                <div className="history-item-title">{s.title || 'Untitled chat'}{live && <span className="history-live"> · live</span>}</div>
+              )}
+              <div className="history-item-meta">
+                <span className="history-time">{fmtAgo(s.updatedAt)}</span>
+                <span className="history-count">{s.messageCount} msg</span>
+              </div>
+              {s.preview && <div className="history-preview">{s.preview.replace(/\n/g, ' ').slice(0, 90)}</div>}
+              <div className="history-item-actions">
+                <button
+                  className="icon-btn"
+                  title="Rename"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setRenaming(s.id)
+                    setRenameText(s.title)
+                  }}
+                >
+                  <Icon name="edit" size={11} />
+                </button>
+                <button
+                  className="icon-btn"
+                  title="Delete"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (confirm(`Delete "${s.title || 'Untitled chat'}"?`)) void deleteSavedSession(s.id)
+                  }}
+                >
+                  <Icon name="x" size={11} />
+                </button>
+              </div>
             </div>
-            {s.preview && <div className="history-preview">{s.preview.replace(/\n/g, ' ').slice(0, 90)}</div>}
-            <div className="history-item-actions">
-              <button
-                className="icon-btn"
-                title="Rename"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setRenaming(s.id)
-                  setRenameText(s.title)
-                }}
-              >
-                <Icon name="edit" size={11} />
-              </button>
-              <button
-                className="icon-btn"
-                title="Delete"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (confirm(`Delete "${s.title || 'Untitled chat'}"?`)) void deleteSession(s.id)
-                }}
-              >
-                <Icon name="x" size={11} />
-              </button>
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )

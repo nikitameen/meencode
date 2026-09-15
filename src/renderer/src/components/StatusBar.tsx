@@ -5,11 +5,14 @@ import { getTheme, toggleTheme } from '../theme'
 import type { GitState } from '../../../preload/index'
 
 export function StatusBar() {
-  const busy = useStore((s) => s.busy)
-  const changes = useStore((s) => s.changes.filter((c) => c.status === 'pending').length)
+  const sessions = useStore((s) => s.sessions)
+  const activeSessionId = useStore((s) => s.activeSessionId)
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? sessions[0]
+  const busy = sessions.some((s) => s.busy)
+  const changes = activeSession?.changes.filter((c) => c.status === 'pending').length ?? 0
+  const approvals = sessions.reduce((n, s) => n + s.approvalsPending, 0)
   const settings = useStore((s) => s.settings)
   const set = useStore((s) => s.set)
-  const approvals = useStore((s) => s.approvalsPending)
   const workspace = useStore((s) => s.settings?.workspace)
   const indexing = useStore((s) => s.indexing)
   const indexPct = useStore((s) => s.indexPct)
@@ -18,6 +21,7 @@ export function StatusBar() {
   const autocomplete = useStore((s) => s.autocompleteEnabled)
   const [theme, setThemeName] = useState(getTheme())
   const wsName = settings?.workspace ? settings.workspace.split(/[\\/]/).pop() : null
+  const runningCount = sessions.filter((s) => s.busy).length
 
   useEffect(() => {
     const onChange = () => setThemeName(getTheme())
@@ -43,7 +47,7 @@ export function StatusBar() {
       <div className="status-left">
         <span className={`status-agent ${busy ? 'busy' : ''}`}>
           <span className="status-dot" />
-          {busy ? 'Agent working…' : 'Agent idle'}
+          {busy ? `Agent working${runningCount > 1 ? ` (${runningCount})` : ''}…` : 'Agent idle'}
         </span>
         {approvals > 0 && (
           <span className="status-approval">

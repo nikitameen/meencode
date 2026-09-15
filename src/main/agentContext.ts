@@ -1,12 +1,12 @@
 // Assembles the full context bundle sent with every agent message:
 // IDE state (active file, cursor, selection, tabs, diagnostics),
 // git state, workspace memory, auto-retrieved relevant code, last failed command.
-import fs from 'node:fs'
 import path from 'node:path'
 import { isRepo, stateFor, logFor } from './gitCore'
 import { memory, retrieveRelevant, readRecentHistory } from './workspaceMemory'
 import { isQueryableText } from './agent/codebaseIndexBridge'
 import { buildKnowledgeBlock } from './knowledgeStore'
+import { readFileCached, readFileCachedSync } from './fileCache'
 
 export interface IDEContext {
   activeFile: string | null      // scoped path "N:rel"
@@ -69,8 +69,8 @@ export function buildContextBlock(ide: IDEContext, userText: string): string {
     const primary = memory.roots[0]
     try {
       const memPath = path.join(primary, '.meencode', 'memory.md')
-      if (fs.existsSync(memPath)) {
-        const raw = fs.readFileSync(memPath, 'utf8')
+      const raw = readFileCachedSync(memPath, 4000)
+      if (raw) {
         // deterministic overview only (the LLM brief is large and lives in its own file)
         const overview = raw.includes('<!-- llm-brief -->') ? raw.slice(0, raw.indexOf('<!-- llm-brief -->')) : raw
         parts.push(`--- Workspace memory (auto-generated overview) ---\n${overview.slice(0, 2500)}`)

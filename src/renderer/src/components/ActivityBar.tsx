@@ -10,7 +10,8 @@ export function ActivityBar() {
   const [view, setView] = useState<ActivityView>('explorer')
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const set = useStore((s) => s.set)
-  const changes = useStore((s) => s.changes.filter((c) => c.status === 'pending').length)
+  const activeSession = useStore((s) => s.sessions.find((x) => x.id === s.activeSessionId) ?? s.sessions[0])
+  const changes = activeSession?.changes.filter((c: import('../store').ChangeEntry) => c.status === 'pending').length ?? 0
   const [gitDirty, setGitDirty] = useState(0)
 
   // allow menus / shortcuts to switch views
@@ -371,12 +372,15 @@ function GitSideView() {
 }
 
 function AgentSideView() {
-  const changes = useStore((s) => s.changes)
+  const sessions = useStore((s) => s.sessions)
+  const activeSessionId = useStore((s) => s.activeSessionId)
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? sessions[0]
+  const changes = activeSession?.changes ?? []
+  const plan = activeSession?.plan ?? []
   const set = useStore((s) => s.set)
   const revertChange = useStore((s) => s.revertChange)
   const keepChange = useStore((s) => s.keepChange)
   const openFile = useStore((s) => s.openFile)
-  const plan = useStore((s) => s.plan)
 
   return (
     <div className="sideview">

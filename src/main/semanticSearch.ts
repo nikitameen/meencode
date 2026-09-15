@@ -4,6 +4,7 @@
 import { searchCodebaseIndex } from './agent/codebaseIndexBridge'
 import { memory, findSymbol } from './workspaceMemory'
 import { proxySafeFetch } from './proxyFetch'
+import { getDb } from './sessionStore'
 
 export interface SearchHit {
   path: string
@@ -20,42 +21,43 @@ interface CacheRow {
   ts: number
 }
 
-let cacheDb: import('sql.js').Database | null = null
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
+const MAX_CACHE_ENTRIES = 5000
 
-/** attach a sql.js handle (created by sessionStore's init) for query caching */
-export function bindSearchCache(db: import('sql.js').Database): void {
-  cacheDb = db
-  db.run(`
-    CREATE TABLE IF NOT EXISTS query_cache (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      query TEXT UNIQUE NOT NULL,
-      expansions_json TEXT NOT NULL,
-      ts INTEGER NOT NULL
-    );
-  `)
+function getCacheDb(): import('better-sqlite3').Database | null {
+  return getDb() as any
 }
 
 function cacheGet(query: string): string[] | null {
-  if (!cacheDb) return null
-  const stmt = cacheDb.prepare('SELECT expansions_json, ts FROM query_cache WHERE query = ?')
-  stmt.bind([query])
-  let out: string[] | null = null
-  if (stmt.step()) {
-    const r = stmt.getAsObject() as Record<string, unknown>
+  const db = getCacheDb()
+  if (!db) return null
+  try {
+    const r = db.prepare('SELECT expansions_json, ts FROM query_cache WHERE query = ?').get(query) as any
+    if (!r) return null
     if (Date.now() - Number(r.ts) < CACHE_TTL_MS) {
-      try { out = JSON.parse(String(r.expansions_json)) } catch { out = null }
+      try { return JSON.parse(String(r.expansions_json)) } catch { return null }
     }
-  }
-  stmt.free()
-  return out
+  } catch { /* table may not exist yet */ }
+  return null
 }
 
 function cachePut(query: string, expansions: string[]): void {
-  if (!cacheDb) return
-  cacheDb.run('INSERT OR REPLACE INTO query_cache (query, expansions_json, ts) VALUES (?, ?, ?)', [
-    query, JSON.stringify(expansions), Date.now()
-  ])
+  const db = getCacheDb()
+  if (!db) return
+  try {
+    db.prepare('INSERT OR REPLACE INTO query_cache (query, expansions_json, ts) VALUES (?, ?, ?)').run(
+      query, JSON.stringify(expansions), Date.now()
+    )
+    pruneCache()
+  } catch { /* table may not exist yet */ }
+}
+
+function pruneCache(): void {
+  const db = getCacheDb()
+  if (!db) return
+  try {
+    db.prepare('DELETE FROM query_cache WHERE id NOT IN (SELECT id FROM query_cache ORDER BY ts DESC LIMIT ?)').run(MAX_CACHE_ENTRIES)
+  } catch { /* ignore */ }
 }
 
 /** Ask the fast model to expand a question into search queries. Cached 24h. */
@@ -143,5 +145,5 @@ export async function semanticSearch(
 
 /** expose db readiness so callers can decide about caching */
 export function isCacheReady(): boolean {
-  return cacheDb != null
+  return getDb() != null
 }

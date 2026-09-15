@@ -8,6 +8,8 @@ import { searchCodebaseIndex } from './codebaseIndexBridge'
 import { recordFailedCommand } from '../agentContext'
 import { semanticSearch } from '../semanticSearch'
 import { getSettings } from '../settingsStore'
+import { mcpManager, type MCPToolDef } from '../mcpManager'
+import { compareScreenshots } from '../visionTools'
 
 const IGNORED = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.meencode', '__pycache__',
@@ -35,6 +37,23 @@ export class Toolkit {
   constructor(public roots: string[], private hooks: ToolkitHooks) {
     this.root = roots[0] ?? ''
     this.defs = this.buildDefs()
+  }
+
+  async refreshMCP(): Promise<void> {
+    const settings = getSettings()
+    await mcpManager.refresh(settings.mcpServers ?? [])
+    const mcpTools = mcpManager.getTools()
+    if (mcpTools.length === 0) return
+    const existing = new Set(this.defs.map((d) => d.name))
+    for (const t of mcpTools) {
+      if (existing.has(t.name)) continue
+      this.defs.push({
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters
+      })
+      existing.add(t.name)
+    }
   }
 
   /** primary root (kept for cwd of commands / checkpoint storage) */
@@ -119,16 +138,29 @@ export class Toolkit {
           required: ['command']
         }
       },
-      {
-        name: 'search_codebase',
-        description: 'Semantic-ish keyword search over the pre-built workspace index. Much faster than grep for finding where a concept lives. Returns path:line: text.',
-        parameters: {
-          type: 'object',
-          properties: { query: { type: 'string', description: 'Keywords to search for' }, limit: { type: 'number', description: 'Max results (default 25, max 60)' } },
-          required: ['query']
+        {
+          name: 'search_codebase',
+          description: 'Semantic-ish keyword search over the pre-built workspace index. Much faster than grep for finding where a concept lives. Returns path:line: text.',
+          parameters: {
+            type: 'object',
+            properties: { query: { type: 'string', description: 'Keywords to search for' }, limit: { type: 'number', description: 'Max results (default 25, max 60)' } },
+            required: ['query']
+          }
+        },
+        {
+          name: 'compare_screenshots',
+          description: 'Compare a live screenshot (image file path) to a reference image using a vision model. Returns differences and CSS/UI fix recommendations.',
+          parameters: {
+            type: 'object',
+            properties: {
+              screenshot_path: { type: 'string', description: 'Path to the live screenshot image' },
+              reference_path: { type: 'string', description: 'Path to the reference image to compare against' },
+              prompt: { type: 'string', description: 'Optional extra instructions (e.g. which regions to focus on)' }
+            },
+            required: ['screenshot_path', 'reference_path']
+          }
         }
-      }
-    ]
+      ]
   }
 
   // ---------- execution ----------
@@ -149,17 +181,38 @@ export class Toolkit {
           if (typeof r === 'string') return r
           return await this.semanticFallback(r.q.slice(0, 300), r.limit)
         }
-        default: return `Error: unknown tool "${name}"`
+        default: {
+          if (this.defs.some((d) => d.name === name && d.description.startsWith('['))) {
+            return await mcpManager.call(name, args ?? {})
+          }
+          return `Error: unknown tool "${name}"`
+        }
+        case 'compare_screenshots': {
+          const { screenshot_path, reference_path, prompt } = args ?? {}
+          const settings = getSettings()
+          const result = await compareScreenshots(settings, String(screenshot_path ?? ''), String(reference_path ?? ''), String(prompt ?? ''))
+          return [
+            `Summary: ${result.summary}`,
+            `Differences:\n${result.differences.map((d) => `- ${d}`).join('\n') || '(none)'}`,
+            `Recommendations:\n${result.recommendations.map((r) => `- ${r}`).join('\n') || '(none)'}`
+          ].join('\n\n')
+        }
       }
     } catch (e: any) {
       return `Error: ${e?.message ?? String(e)}`
     }
   }
 
+  // ---------- public helpers ----------
+
+  resolve(userPath: string): string {
+    return this._resolve(userPath)
+  }
+
   // ---------- path sandboxing ----------
 
   /** multi-root aware: tries "N:rel" scoped paths, then each root; absolute paths must fall inside a root */
-  private resolve(userPath: string): string {
+  private _resolve(userPath: string): string {
     const p = String(userPath ?? '')
     // scoped form "1:rel"
     const m = p.match(/^(\d+):(.*)$/)

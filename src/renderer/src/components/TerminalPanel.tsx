@@ -11,7 +11,9 @@ type ShellTab = { id: string; title: string; profile: string }
 type Profile = { id: string; label: string; available: boolean }
 
 export function TerminalPanel() {
-  const terminal = useStore((s) => s.terminal)
+  const sessions = useStore((s) => s.sessions)
+  const activeSessionId = useStore((s) => s.activeSessionId)
+  const terminal = sessions.find((s) => s.id === activeSessionId)?.terminal ?? sessions[0]?.terminal ?? []
   const toggleTerminal = useStore((s) => s.toggleTerminal)
   const settings = useStore((s) => s.settings)
   const [input, setInput] = useState('')

@@ -2,7 +2,7 @@
 const os = require('node:os')
 const path = require('node:path')
 
-const userData = path.join(os.tmpdir(), 'meencode-test-userdata')
+const userData = path.join(os.tmpdir(), 'meencode-test-userdata-' + Date.now().toString(36))
 
 module.exports = {
   app: {

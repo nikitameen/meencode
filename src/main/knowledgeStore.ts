@@ -33,7 +33,7 @@ export function kindDescription(kind: KnowledgeKind): string {
 function ensureTable(): void {
   const db = getDb()
   if (!db) throw new Error('knowledge store requires the session DB')
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS knowledge (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       kind TEXT NOT NULL,
@@ -49,6 +49,7 @@ function ensureTable(): void {
 }
 
 let seeded = false
+let activeCache: { workspace: string | null; rows: KnowledgeRow[] } | null = null
 
 /** Create the table + seed once from rules files of the given workspace. */
 export function ensureKnowledge(workspace: string | null): void {
@@ -58,8 +59,8 @@ export function ensureKnowledge(workspace: string | null): void {
   if (seeded || !workspace) return
   seeded = true
   // seed only if the store is completely empty
-  const res = db.exec('SELECT COUNT(*) AS n FROM knowledge')
-  const count = Number(res[0]?.values[0]?.[0] ?? 0)
+  const row = db.prepare('SELECT COUNT(*) AS n FROM knowledge').get() as any
+  const count = Number(row?.n ?? 0)
   if (count > 0) return
   const files: [string, KnowledgeKind, string][] = [
     ['.meencoderules', 'rule', 'Project rules (.meencoderules)'],
@@ -79,7 +80,7 @@ export function ensureKnowledge(workspace: string | null): void {
   }
 }
 
-function rowToKnowledge(r: Record<string, unknown>): KnowledgeRow {
+function rowToKnowledge(r: any): KnowledgeRow {
   return {
     id: Number(r.id),
     kind: String(r.kind) as KnowledgeKind,
@@ -104,24 +105,19 @@ export function addKnowledge(input: KnowledgeInput): KnowledgeRow | null {
   const db = getDb()
   if (!db) return null
   ensureTable()
+  activeCache = null
   const now = Date.now()
-  db.run('INSERT INTO knowledge (kind, title, content, workspace, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [
+  const info = db.prepare('INSERT INTO knowledge (kind, title, content, workspace, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
     input.kind, input.title.slice(0, 160), input.content.slice(0, 50000), input.workspace, input.enabled ? 1 : 0, now, now
-  ])
-  const res = db.exec('SELECT last_insert_rowid() AS id')
-  const id = Number(res[0]?.values[0]?.[0] ?? 0)
-  return getKnowledge(id)
+  )
+  return getKnowledge(Number(info.lastInsertRowid))
 }
 
 export function getKnowledge(id: number): KnowledgeRow | null {
   const db = getDb()
   if (!db) return null
-  const stmt = db.prepare('SELECT * FROM knowledge WHERE id = ?')
-  stmt.bind([id])
-  let out: KnowledgeRow | null = null
-  if (stmt.step()) out = rowToKnowledge(stmt.getAsObject())
-  stmt.free()
-  return out
+  const r = db.prepare('SELECT * FROM knowledge WHERE id = ?').get(id) as any
+  return r ? rowToKnowledge(r) : null
 }
 
 /** List entries: global (workspace IS NULL) + the given workspace's own. */
@@ -129,14 +125,10 @@ export function listKnowledge(workspace: string | null): KnowledgeRow[] {
   const db = getDb()
   if (!db) return []
   ensureTable()
-  const stmt = db.prepare(
+  const rows = db.prepare(
     'SELECT * FROM knowledge WHERE workspace IS NULL OR workspace = ? ORDER BY kind ASC, updated_at DESC'
-  )
-  stmt.bind([workspace ?? ''])
-  const out: KnowledgeRow[] = []
-  while (stmt.step()) out.push(rowToKnowledge(stmt.getAsObject()))
-  stmt.free()
-  return out
+  ).all(workspace ?? '') as any[]
+  return rows.map(rowToKnowledge)
 }
 
 export function updateKnowledge(id: number, patch: Partial<KnowledgeInput>): KnowledgeRow | null {
@@ -151,30 +143,31 @@ export function updateKnowledge(id: number, patch: Partial<KnowledgeInput>): Kno
     workspace: patch.workspace !== undefined ? patch.workspace : cur.workspace,
     enabled: patch.enabled ?? cur.enabled
   }
-  db.run('UPDATE knowledge SET kind = ?, title = ?, content = ?, workspace = ?, enabled = ?, updated_at = ? WHERE id = ?', [
+  activeCache = null
+  db.prepare('UPDATE knowledge SET kind = ?, title = ?, content = ?, workspace = ?, enabled = ?, updated_at = ? WHERE id = ?').run(
     next.kind, next.title, next.content, next.workspace, next.enabled ? 1 : 0, Date.now(), id
-  ])
+  )
   return getKnowledge(id)
 }
 
 export function deleteKnowledge(id: number): void {
   const db = getDb()
   if (!db) return
-  db.run('DELETE FROM knowledge WHERE id = ?', [id])
+  activeCache = null
+  db.prepare('DELETE FROM knowledge WHERE id = ?').run(id)
 }
 
-/** Everything that should be injected into the agent prompt right now. */
+/** Everything that should be injected into the agent prompt right now. Cached per workspace until invalidated. */
 export function activeKnowledge(workspace: string | null): KnowledgeRow[] {
+  if (activeCache?.workspace === workspace) return activeCache.rows
   const db = getDb()
   if (!db) return []
   ensureTable()
-  const stmt = db.prepare(
+  const rows = db.prepare(
     'SELECT * FROM knowledge WHERE enabled = 1 AND (workspace IS NULL OR workspace = ?) ORDER BY kind ASC, updated_at DESC'
-  )
-  stmt.bind([workspace ?? ''])
-  const out: KnowledgeRow[] = []
-  while (stmt.step()) out.push(rowToKnowledge(stmt.getAsObject()))
-  stmt.free()
+  ).all(workspace ?? '') as any[]
+  const out = rows.map(rowToKnowledge)
+  activeCache = { workspace, rows: out }
   return out
 }
 
@@ -207,10 +200,11 @@ export function buildKnowledgeBlock(workspace: string | null): string {
     for (const e of entries) {
       if (budget <= 100) break
       const chunk = e.content.slice(0, budget)
-      lines.push(`### ${e.title}${e.workspace ? '' : ' (global)'}\n${chunk}`)
+      lines.push(`### ${e.title}${e.workspace ? '' : ' (global)'}`)
+      lines.push(chunk)
       budget -= chunk.length
     }
-    if (lines.length > 0) sections.push(`--- ${titles[kind]} ---\n${lines.join('\n\n')}`)
+    if (lines.length > 0) sections.push(`--- ${titles[kind]} ---\n${lines.join('\n')}`)
   }
   return sections.join('\n\n')
 }

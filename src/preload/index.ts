@@ -60,13 +60,14 @@ const api = {
       selection?: string
       openTabs: string[]
       diagnostics?: { path: string; line: number; severity: string; message: string }[]
-    }) =>
-      ipcRenderer.invoke('agent:send', text, attachedFile, images, ide) as Promise<boolean>,
-    stop: () => ipcRenderer.invoke('agent:stop') as Promise<boolean>,
-    approve: (id: string, ok: boolean) => ipcRenderer.invoke('agent:approve', id, ok) as Promise<boolean>,
-    reset: () => ipcRenderer.invoke('agent:reset') as Promise<boolean>,
-    revert: (path: string) => ipcRenderer.invoke('agent:revert', path) as Promise<boolean>,
-    revertAll: () => ipcRenderer.invoke('agent:revertAll') as Promise<number>,
+    }, sessionId?: string | null) =>
+      ipcRenderer.invoke('agent:send', text, attachedFile, images, ide, sessionId) as Promise<boolean>,
+    stop: (sessionId: string) => ipcRenderer.invoke('agent:stop', sessionId) as Promise<boolean>,
+    approve: (sessionId: string, id: string, ok: boolean) => ipcRenderer.invoke('agent:approve', sessionId, id, ok) as Promise<boolean>,
+    reset: (sessionId: string) => ipcRenderer.invoke('agent:reset', sessionId) as Promise<boolean>,
+    revert: (sessionId: string, path: string) => ipcRenderer.invoke('agent:revert', sessionId, path) as Promise<boolean>,
+    revertAll: (sessionId: string) => ipcRenderer.invoke('agent:revertAll', sessionId) as Promise<number>,
+    changes: (sessionId: string) => ipcRenderer.invoke('agent:changes', sessionId) as Promise<import('../shared/types').FileChange[]>,
     onEvent: (cb: EventCb<AgentEvent>) => subscribe('agent:event', cb)
   },
   sessions: {

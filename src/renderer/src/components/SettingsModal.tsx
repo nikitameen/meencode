@@ -17,6 +17,8 @@ export function SettingsModal() {
   const [models, setModels] = useState<string[]>([])
   const [modelsError, setModelsError] = useState<string | null>(null)
   const [loadingModels, setLoadingModels] = useState(false)
+  const [subModels, setSubModels] = useState<Record<string, string>>(settings?.subAgentModels ?? {})
+  const [mcpServers, setMcpServers] = useState<import('../../../shared/types').MCPServerConfig[]>(settings?.mcpServers ?? [])
 
   useEffect(() => {
     if (!open) return
@@ -26,6 +28,8 @@ export function SettingsModal() {
     setFastModel(settings?.fastModel || settings?.model || 'glm-5.3-flash')
     setMaxIter(settings?.maxIterations ?? 30)
     setAutoRun(settings?.autoRunCommands ?? false)
+    setSubModels(settings?.subAgentModels ?? {})
+    setMcpServers(settings?.mcpServers ?? [])
   }, [open, settings])
 
   const loadModels = async () => {
@@ -48,7 +52,7 @@ export function SettingsModal() {
   if (!open) return null
 
   const save = async () => {
-    await window.meencode.settings.update({ apiKey, baseUrl, model, fastModel, maxIterations: maxIter, autoRunCommands: autoRun })
+    await window.meencode.settings.update({ apiKey, baseUrl, model, fastModel, subAgentModels: subModels, maxIterations: maxIter, autoRunCommands: autoRun, mcpServers })
     const s = await window.meencode.settings.get()
     set('settings', s)
     setSaved(true)
@@ -148,6 +152,73 @@ export function SettingsModal() {
                 </span>
               </span>
             </label>
+          </div>
+
+          <div className="field">
+            <label>Per-agent models (optional)</label>
+            <div className="field-hint">Override which model each agent uses. Leave blank to inherit the main or fast model.</div>
+            {['orchestrator', 'planner', 'coder', 'reviewer', 'debugger', 'researcher'].map((agent) => (
+              <div key={agent} className="subagent-model-row">
+                <span className="subagent-model-name">{agent}</span>
+                <input
+                  placeholder={agent === 'coder' || agent === 'debugger' || agent === 'orchestrator' ? model : fastModel}
+                  value={subModels[agent] ?? ''}
+                  onChange={(e) => setSubModels({ ...subModels, [agent]: e.target.value })}
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="field">
+            <label>MCP servers</label>
+            <div className="field-hint">Add Model Context Protocol servers (e.g. Playwright, Chrome DevTools) to give the agent browser/UI tools.</div>
+            {mcpServers.map((srv, i) => (
+              <div key={srv.id} className="mcp-row">
+                <input
+                  placeholder="Name"
+                  value={srv.name}
+                  onChange={(e) => {
+                    const next = [...mcpServers]
+                    next[i] = { ...srv, name: e.target.value }
+                    setMcpServers(next)
+                  }}
+                />
+                <input
+                  placeholder="Command (e.g. npx @anthropic-ai/mcp-playwright)"
+                  value={srv.command}
+                  onChange={(e) => {
+                    const next = [...mcpServers]
+                    next[i] = { ...srv, command: e.target.value }
+                    setMcpServers(next)
+                  }}
+                />
+                <label className="toggle mini">
+                  <input type="checkbox" checked={srv.enabled} onChange={(e) => {
+                    const next = [...mcpServers]
+                    next[i] = { ...srv, enabled: e.target.checked }
+                    setMcpServers(next)
+                  }} />
+                  <span className="toggle-track"><span className="toggle-thumb" /></span>
+                </label>
+                <button className="icon-btn" onClick={() => setMcpServers(mcpServers.filter((_, idx) => idx !== i))} title="Remove">
+                  <Icon name="x" size={12} />
+                </button>
+              </div>
+            ))}
+            <div className="preset-row">
+              <button className="btn" onClick={() => setMcpServers([...mcpServers, { id: Math.random().toString(36).slice(2, 10), name: '', command: '', enabled: true, args: [], env: {}, timeout: 30000 }])}>
+                <Icon name="plus" size={12} /> Add MCP server
+              </button>
+              <button className="btn" onClick={() => {
+                const next = [...mcpServers]
+                if (!next.some((s) => s.name === 'playwright')) {
+                  next.push({ id: Math.random().toString(36).slice(2, 10), name: 'playwright', command: 'npx', args: ['-y', '@anthropic-ai/mcp-playwright'], enabled: true, env: {}, timeout: 60000 })
+                }
+                setMcpServers(next)
+              }}>
+                <Icon name="plus" size={12} /> Add Playwright preset
+              </button>
+            </div>
           </div>
         </div>
         <div className="modal-footer">

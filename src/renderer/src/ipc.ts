@@ -1,6 +1,8 @@
 import { useStore } from './store'
 import type { MeencodeAPI } from '../../preload/index'
 
+export type { MeencodeAPI }
+
 declare global {
   interface Window {
     meencode: MeencodeAPI
@@ -18,13 +20,22 @@ export function initBridge(): void {
   window.meencode.agent.onEvent((e) => useStore.getState().handleAgentEvent(e))
   window.meencode.exec.onEvent((e) => {
     const s = store.getState()
+    const activeSessionId = s.activeSessionId
     if (e.kind === 'output') {
       useStore.setState({
-        terminal: s.terminal.map((t) => (t.id === e.id ? { ...t, output: (t.output + e.data).slice(-20000) } : t))
+        sessions: s.sessions.map((sess) =>
+          sess.id === activeSessionId
+            ? { ...sess, terminal: sess.terminal.map((t) => (t.id === e.id ? { ...t, output: (t.output + e.data).slice(-20000) } : t)) }
+            : sess
+        )
       })
     } else if (e.kind === 'exit') {
       useStore.setState({
-        terminal: s.terminal.map((t) => (t.id === e.id ? { ...t, running: false, exit: e.code ?? 0 } : t))
+        sessions: s.sessions.map((sess) =>
+          sess.id === activeSessionId
+            ? { ...sess, terminal: sess.terminal.map((t) => (t.id === e.id ? { ...t, running: false, exit: e.code ?? 0 } : t)) }
+            : sess
+        )
       })
     }
   })

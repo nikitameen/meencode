@@ -122,10 +122,13 @@ export function MenuBar() {
       ]
     },
     {
-      name: 'Run',
+      name: 'Chat',
       items: [
+        { kind: 'item', label: 'New Chat Session', accel: 'Ctrl+Shift+N', run: () => store().newSession() },
+        { kind: 'item', label: 'Clear Active Conversation', run: () => store().clearChat() },
+        { kind: 'item', label: 'Chat History', accel: 'Ctrl+Alt+H', run: () => store().toggleHistory() },
+        { kind: 'sep' },
         { kind: 'item', label: 'Ask Agent about Selection', run: () => askAgentAboutSelection() },
-        { kind: 'item', label: 'AI Edit Selection (Cmd+K)', accel: 'Ctrl+K', run: () => withEditor((ed) => ed.focus()) },
         { kind: 'sep' },
         { kind: 'item', label: 'Review Agent Changes', accel: 'Ctrl+Shift+R', run: () => store().set('reviewModalOpen', true) },
         { kind: 'item', label: 'Restore Checkpoint…', run: () => store().set('checkpointsModalOpen', true) }

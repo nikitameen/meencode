@@ -1,8 +1,8 @@
-type IconName =
+export type IconName =
   | 'folder' | 'folderOpen' | 'file' | 'chat' | 'terminal' | 'settings' | 'play' | 'stop' | 'check'
   | 'x' | 'revert' | 'sparkle' | 'chevronDown' | 'chevronRight' | 'chevronLeft' | 'plus' | 'plusFolder' | 'refresh'
   | 'search' | 'attach' | 'send' | 'min' | 'max' | 'close' | 'eye' | 'eyeOff' | 'alert' | 'review'
-    | 'external' | 'spinner' | 'dot' | 'git' | 'import' | 'browser' | 'dots' | 'edit'
+    | 'external' | 'spinner' | 'dot' | 'git' | 'import' | 'browser' | 'dots' | 'edit' | 'tool' | 'mcp'
 
 export function Icon({ name, size = 14 }: { name: IconName; size?: number }) {
   const p: Record<IconName, React.ReactNode> = {
@@ -41,7 +41,9 @@ export function Icon({ name, size = 14 }: { name: IconName; size?: number }) {
     git: <g fill="none" strokeWidth="1.4"><circle cx="4" cy="4" r="1.7" /><circle cx="4" cy="12" r="1.7" /><circle cx="12" cy="7" r="1.7" /><path d="M4 5.7v4.6M5.5 4h3.2c1 0 1.8.6 1.8 1.6v0c0 1-.8 1.6-1.8 1.6H5.5M12 8.7v.3c0 1.5-1 2-2.4 2H5.7" /></g>,
     import: <path d="M8 1.5v8.3m0 0L4.8 6.6M8 9.8l3.2-3.2M2 12.5h12" strokeWidth="1.5" fill="none" />,
     browser: <g fill="none" strokeWidth="1.3"><circle cx="8" cy="8" r="6.4" /><path d="M1.6 8h12.8M8 1.6c2.2 1.8 2.2 11 0 12.8M8 1.6c-2.2 1.8-2.2 11 0 12.8" /></g>,
-    dots: <g><circle cx="3.5" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="12.5" cy="8" r="1.3" /></g>
+    dots: <g><circle cx="3.5" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="12.5" cy="8" r="1.3" /></g>,
+    tool: <path d="M3 2.5h2.5v4H3v-4Zm5.5 0h2.5v9H8.5v-9Zm5.5 0H16v6h-2v-6Z" />,
+    mcp: <path d="M8 1l3.5 2v4L8 9 4.5 7V3L8 1Zm0 1.7L5.5 4v2.5L8 8.3l2.5-1.8V4L8 2.7Z" />
   }
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" className={`icon icon-${name}`} aria-hidden>
@@ -77,5 +79,10 @@ export const TOOL_LABELS: Record<string, string> = {
   search_files: 'searched',
   grep: 'grepped',
   run_command: 'ran',
-  spawn_agent: 'delegated to'
+  spawn_agent: 'delegated to',
+  compare_screenshots: 'compared'
+}
+
+export function isMCPTool(name: string): boolean {
+  return name.includes('.')
 }

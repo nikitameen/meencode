@@ -1,6 +1,8 @@
 import type { AgentEvent, AgentMessage } from '../../shared/types'
 import type { AgentMessage as AM, ToolCall, ToolDef } from '../../shared/agent/types'
 
+import type { AgentEventPayload } from '../../shared/types'
+
 export interface LoopDeps {
   chat(
     messages: AgentMessage[],
@@ -10,7 +12,7 @@ export interface LoopDeps {
   ): Promise<{ content: string; toolCalls: ToolCall[] }>
   tools: ToolDef[]
   execute(call: ToolCall): Promise<string>
-  emit(e: AgentEvent): void
+  emit(e: AgentEventPayload): void
   agent: string
   maxIterations: number
   signal: AbortSignal
@@ -24,6 +26,8 @@ export interface LoopResult {
   aborted?: boolean
   /** set when the run threw; newMessages holds partial learnings gathered so far */
   error?: string
+  /** set when the loop hit maxIterations and a fresh iteration is needed */
+  hitIterationLimit?: boolean
 }
 
 const HISTORY_TOOL_CAP = 2500
@@ -31,6 +35,8 @@ const HISTORY_TOOL_CAP = 2500
 export function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + '\n[... truncated]' : s
 }
+
+const MAX_HISTORY_CHARS = 80000
 
 export async function runLoop(deps: LoopDeps, system: string, history: AgentMessage[]): Promise<LoopResult> {
   const messages: AgentMessage[] = [{ role: 'system', content: system }, ...history]
@@ -40,6 +46,12 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
 
   try {
     for (let i = 0; i < deps.maxIterations; i++) {
+      // Keep the live message window bounded so very long runs do not bloat RAM.
+      if (messages.length > 20) {
+        const compacted = compactHistoryBytes(messages, 16, MAX_HISTORY_CHARS)
+        messages.splice(0, messages.length, { role: 'system', content: system }, ...compacted)
+      }
+
       const res = await deps.chat(messages, deps.tools, deps.signal, {
         onToken: (t) => deps.emit({ type: 'token', text: t }),
         onThinking: (t) => deps.emit({ type: 'thinking', text: t })
@@ -104,6 +116,10 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
           messages.push(await runOne(call))
         }
       }
+      // After consuming tool results, drop bulky intermediate read results
+      // that the model is unlikely to need again (read_file, grep, search_files).
+      // Keep the last 8 non-system/tool messages + summaries.
+      dropStaleReads(messages)
       continue
     }
 
@@ -124,13 +140,14 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
     }
   }
 
-  if (!final) {
-    final = `(Reached max tool iterations — ${deps.maxIterations}. Elapsed ${((Date.now() - t0) / 1000).toFixed(1)}s. Ask me to continue.)`
+  const hitLimit = !final
+  if (hitLimit) {
+    final = `(Reached max tool iterations — ${deps.maxIterations}. Elapsed ${((Date.now() - t0) / 1000).toFixed(1)}s. Asking to continue with a summarized context.)`
     messages.push({ role: 'assistant', content: final })
   }
 
   // messages = [system, ...history, ...newThisRun]; return ONLY this run's messages
-  return { content: final, newMessages: messages.slice(1 + history.length), toolCallsMade }
+  return { content: final, newMessages: messages.slice(1 + history.length), toolCallsMade, hitIterationLimit: hitLimit }
 }
 
 export function compactHistory(history: AgentMessage[], keep = 30): AgentMessage[] {
@@ -155,33 +172,61 @@ export function compactHistoryBytes(history: AgentMessage[], keep = 30, maxChars
     if (m.role !== 'user' || i === lastUserIdx) return m
     const content = typeof m.content === 'string' ? m.content : m.content
     if (typeof content !== 'string') return m
-    const stripped = content.replace(/\n\n--- [^\n]*---\n[\s\S]*$/g, '\n\n[context from that turn omitted]')
+    const stripped = stripContextBlock(content)
     return { ...m, content: stripped }
   })
   // hard byte cap: drop oldest messages until under budget,
   // but never drop the newest user turn (it carries this turn's context)
-  const size = (m: AgentMessage): number =>
-    (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length) +
-    (('tool_calls' in m && m.tool_calls) ? JSON.stringify(m.tool_calls).length : 0)
-  let total = h.reduce((n, m) => n + size(m), 0)
+  const sizes = h.map(sizeOf)
+  let total = sizes.reduce((n, m) => n + m, 0)
   const newestUserIdx = h.reduce((acc, m, i) => (m.role === 'user' ? i : acc), -1)
   while (total > maxChars && h.length > 2) {
     // stop dropping if the next drop would eat the newest user turn
     if (h.length - 1 <= newestUserIdx) break
-    total -= size(h[0])
+    total -= sizes[0]
     h = h.slice(1)
+    sizes.shift()
   }
   // still over budget? truncate bulky non-user messages in place (oldest first)
   if (total > maxChars) {
-    h = h.map((m) => {
-      if (m.role === 'user' || total <= maxChars) return m
+    for (let i = 0; i < h.length; i++) {
+      const m = h[i]
+      if (m.role === 'user' || total <= maxChars) continue
       const MARKER = '\n[...truncated]'
       const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')
       const budgetForThis = Math.max(200, content.length - (total - maxChars) - MARKER.length)
       const kept = content.slice(0, budgetForThis) + MARKER
       total -= content.length - kept.length
-      return { ...m, content: kept }
-    })
+      h[i] = { ...m, content: kept }
+    }
   }
   return h
+}
+
+function stripContextBlock(content: string): string {
+  const idx = content.indexOf('\n\n--- ')
+  return idx === -1 ? content : content.slice(0, idx) + '\n\n[context from that turn omitted]'
+}
+
+function sizeOf(m: AgentMessage): number {
+  return (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length) +
+    (('tool_calls' in m && m.tool_calls) ? JSON.stringify(m.tool_calls).length : 0)
+}
+
+const READ_TOOLS = new Set(['list_dir', 'read_file', 'search_files', 'grep', 'search_codebase'])
+
+/** Drop bulky read-only tool results from the middle of the history, keeping the most recent ones and all assistant/tool-call messages. */
+function dropStaleReads(messages: AgentMessage[]): void {
+  if (messages.length <= 10) return
+  let removed = 0
+  // start after system (0) + a small tail budget; stop before the last few messages
+  for (let i = 2; i < messages.length - 6 && removed < 4; i++) {
+    const m = messages[i]
+    if (m.role === 'tool' && READ_TOOLS.has(m.name ?? '')) {
+      if (m.content.length > 1200) {
+        m.content = m.content.slice(0, 800) + '\n[...older read result truncated to save context]'
+        removed++
+      }
+    }
+  }
 }

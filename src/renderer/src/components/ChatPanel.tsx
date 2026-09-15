@@ -1,13 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { Icon, AGENT_COLORS, AGENT_LABELS, TOOL_LABELS } from './ui'
+import { Icon, AGENT_COLORS, AGENT_LABELS, TOOL_LABELS, isMCPTool } from './ui'
 import { SessionHistoryPanel } from './SessionHistoryPanel'
 
 export function ChatPanel() {
-  const feed = useStore((s) => s.feed)
-  const busy = useStore((s) => s.busy)
+  const sessions = useStore((s) => s.sessions)
+  const activeSessionId = useStore((s) => s.activeSessionId)
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? sessions[0] ?? makeSession()
+  const feed = activeSession.feed
+  const busy = activeSession.busy
   const send = useStore((s) => s.send)
-  const stop = useStore(() => window.meencode.agent.stop)
+  const stop = useStore((s) => s.stop)
+  const switchSession = useStore((s) => s.switchSession)
+  const newSession = useStore((s) => s.newSession)
+  const closeSession = useStore((s) => s.closeSession)
   const settings = useStore((s) => s.settings)
   const activeTab = useStore((s) => s.activeTab)
   const files = useStore((s) => s.files)
@@ -17,6 +23,7 @@ export function ChatPanel() {
   const [dragOver, setDragOver] = useState(false)
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null)
   const [mentionSel, setMentionSel] = useState(0)
+  const [showAllTabs, setShowAllTabs] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
@@ -35,7 +42,6 @@ export function ChatPanel() {
         }
         reader.readAsDataURL(blob)
       }
-      // pasting a file from the OS explorer arrives as text with a path
       if (item.kind === 'string' && item.type === 'text/plain') {
         item.getAsString(async (s) => {
           const m = s.match(/^[a-zA-Z]:[\\/].*\.(png|jpe?g|gif|webp|bmp)$/i)
@@ -77,7 +83,6 @@ export function ChatPanel() {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight })
   }, [feed])
 
-  // "Ask Agent about Selection" / Run menu prefill
   useEffect(() => {
     const onPrefill = (e: Event) => {
       const detail = (e as CustomEvent).detail as string
@@ -96,7 +101,6 @@ export function ChatPanel() {
 
   const onChange = (v: string) => {
     setText(v)
-    // detect @mention typing
     const ta = taRef.current
     const caret = ta?.selectionStart ?? v.length
     const upto = v.slice(0, caret)
@@ -132,6 +136,9 @@ export function ChatPanel() {
     void send(t, attach, imgs)
   }
 
+  const visibleTabs = showAllTabs ? sessions : sessions.slice(0, 8)
+  const hiddenCount = sessions.length - visibleTabs.length
+
   return (
     <div className="chat-panel">
       <div className="chat-header">
@@ -149,6 +156,45 @@ export function ChatPanel() {
           </button>
         </div>
       </div>
+
+      <div className="chat-tabs-bar">
+        <div className={`chat-tabs ${showAllTabs ? 'expanded' : ''}`}>
+          {visibleTabs.map((sess) => (
+            <div
+              key={sess.id}
+              className={`chat-tab ${sess.id === activeSessionId ? 'active' : ''} ${sess.busy ? 'busy' : ''}`}
+              onClick={() => switchSession(sess.id)}
+              title={sess.title}
+            >
+              <span className="chat-tab-dot" />
+              <span className="chat-tab-title">{sess.title || 'Chat'}</span>
+              {sessions.length > 1 && (
+                <button
+                  className="chat-tab-close"
+                  onClick={(e) => { e.stopPropagation(); closeSession(sess.id) }}
+                  title="Close session"
+                >
+                  <Icon name="x" size={10} />
+                </button>
+              )}
+            </div>
+          ))}
+          {hiddenCount > 0 && !showAllTabs && (
+            <button className="chat-tab more" onClick={() => setShowAllTabs(true)} title={`${hiddenCount} more sessions`}>
+              +{hiddenCount}
+            </button>
+          )}
+          {showAllTabs && (
+            <button className="chat-tab more" onClick={() => setShowAllTabs(false)} title="Collapse tabs">
+              <Icon name="chevronLeft" size={10} />
+            </button>
+          )}
+        </div>
+        <button className="chat-new-tab" title="New chat session" onClick={() => { newSession(); setText(''); setImages([]) }}>
+          <Icon name="plus" size={12} />
+        </button>
+      </div>
+
       <div className="chat-body">
         <div className="chat-list" ref={listRef}>
           {feed.length === 0 && <Welcome />}
@@ -246,6 +292,11 @@ export function ChatPanel() {
   )
 }
 
+function makeSession(): import('../store').ChatSession {
+  const now = Date.now()
+  return { id: Math.random().toString(36).slice(2, 10), title: 'New chat', feed: [], changes: [], terminal: [], plan: [], currentAssistantId: null, busy: false, approvalsPending: 0, createdAt: now, updatedAt: now }
+}
+
 function Welcome() {
   const send = useStore((s) => s.send)
   const suggestions = [
@@ -272,7 +323,7 @@ function Welcome() {
   )
 }
 
-function FeedItemView({ item }: { item: ReturnType<typeof useStore.getState>['feed'][number] }) {
+function FeedItemView({ item }: { item: import('../store').FeedItem }) {
   switch (item.kind) {
     case 'user':
       return (
@@ -357,9 +408,11 @@ function Markdownish({ text }: { text: string }) {
 function ToolItem(props: { id: string; kind: 'tool'; agent: string; name: string; argsSummary: string; status: string; result?: string; ms?: number }) {
   const [open, setOpen] = useState(false)
   const color = AGENT_COLORS[props.agent] ?? 'var(--dim)'
-  const verb = TOOL_LABELS[props.name] ?? props.name
+  const isMcp = isMCPTool(props.name)
+  const verb = TOOL_LABELS[props.name] ?? (isMcp ? props.name.split('.')[1] : props.name)
+  const iconName: import('./ui').IconName = isMcp ? 'mcp' : 'tool'
   return (
-    <div className="tool-item" style={{ borderLeftColor: color }}>
+    <div className={`tool-item ${isMcp ? 'mcp' : ''}`} style={{ borderLeftColor: color }}>
       <button className="tool-row" onClick={() => setOpen(!open)}>
         {props.status === 'running' ? (
           <span className="tool-spinner"><Icon name="spinner" size={11} /></span>
@@ -368,6 +421,7 @@ function ToolItem(props: { id: string; kind: 'tool'; agent: string; name: string
         ) : (
           <span className="tool-error"><Icon name="x" size={11} /></span>
         )}
+        <span className="tool-icon"><Icon name={iconName} size={11} /></span>
         <span className="tool-agent" style={{ color }}>{AGENT_LABELS[props.agent] ?? props.agent}</span>
         <span className="tool-verb">{verb}</span>
         <span className="tool-args" title={props.result}>{props.argsSummary}</span>
