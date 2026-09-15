@@ -33,6 +33,34 @@ export interface LoopResult {
 
 const HISTORY_TOOL_CAP = 2500
 
+function fuzzyToolName(name: string, tools: ToolDef[]): string | null {
+  const n = name.trim().toLowerCase()
+  // strip common prefixes/suffixes models add
+  const clean = n.replace(/^functions\./, '').replace(/:\d+$/, '').replace(/-/g, '_')
+  // exact match after normalization
+  const exact = tools.find((t) => t.name.toLowerCase() === clean)
+  if (exact) return exact.name
+  // known aliases
+  const aliases: Record<string, string> = {
+    listdir: 'list_dir', ls: 'list_dir',
+    readfile: 'read_file', read: 'read_file',
+    writefile: 'write_file', write: 'write_file',
+    editfile: 'edit_file', edit: 'edit_file',
+    deletefile: 'delete_file', delete: 'delete_file',
+    searchfiles: 'search_files', findfiles: 'search_files',
+    searchcodebase: 'search_codebase', search_code_base: 'search_codebase', codebase_search: 'search_codebase', codebasesearch: 'search_codebase',
+    comparescreenshots: 'compare_screenshots',
+    runcmd: 'run_command', runcommand: 'run_command', execute_command: 'run_command'
+  }
+  if (aliases[clean]) return aliases[clean]
+  // substring match: e.g. "agent_read_file" -> "read_file"
+  for (const t of tools) {
+    const tn = t.name.toLowerCase()
+    if (clean.includes(tn) || tn.includes(clean)) return t.name
+  }
+  return null
+}
+
 export function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + '\n[... truncated]' : s
 }
@@ -102,6 +130,13 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
         let ok = true
         try {
           result = await deps.execute(call)
+          // If the model called a tool by a weird name, try once with a fuzzy match.
+          if (typeof result === 'string' && result.startsWith('Error: unknown tool')) {
+            const fixed = fuzzyToolName(call.name, deps.tools)
+            if (fixed && fixed !== call.name) {
+              result = await deps.execute({ ...call, name: fixed })
+            }
+          }
         } catch (e: any) {
           ok = false
           result = `Error: ${e?.message ?? String(e)}`
