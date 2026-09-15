@@ -9,6 +9,10 @@ import { initSessionDb, pruneSessions, getDb } from './sessionStore'
 import { ensureKnowledge } from './knowledgeStore'
 import { initLearning } from './learningStore'
 
+process.on('uncaughtException', (e) => {
+  console.error('MAIN UNCAUGHT EXCEPTION:', e)
+})
+
 function loadDotEnv(): void {
   try {
     const envPath = path.join(app.getAppPath(), '.env')
@@ -76,22 +80,22 @@ if (!app.requestSingleInstanceLock()) {
     }
   })
 
-  void app.whenReady().then(() => {
-    loadDotEnv()
-    loadSettings()
-    createWindow()
-    // session DB (SQLite) — failures degrade gracefully (no persistence)
-  void initSessionDb()
-    .then(() => {
+  void app.whenReady().then(async () => {
+    try {
+      loadDotEnv()
+      loadSettings()
+      await initSessionDb()
       pruneSessions()
       ensureKnowledge(getSettings().workspace)
       initLearning(getSettings().workspace)
-    })
-    .catch((e) => console.warn('session DB unavailable:', e?.message ?? e))
+    } catch (e: any) {
+      console.warn('session DB unavailable:', e?.message ?? e)
+    }
+    createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
-  })
+  }).catch((e) => console.error('MAIN: whenReady failed:', e))
 
   app.on('window-all-closed', () => {
     disposeAllPty()

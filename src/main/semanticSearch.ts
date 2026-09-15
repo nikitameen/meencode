@@ -24,7 +24,7 @@ interface CacheRow {
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const MAX_CACHE_ENTRIES = 5000
 
-function getCacheDb(): import('better-sqlite3').Database | null {
+function getCacheDb(): { prepare: Function } | null {
   return getDb() as any
 }
 
