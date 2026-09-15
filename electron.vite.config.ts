@@ -5,9 +5,9 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        // canvas is a native module with platform DLLs; bundling it breaks loading.
-        // Keep it external so Electron loads it from node_modules with all its deps.
-        external: ['canvas']
+        // Native modules with platform binaries/DLLs must stay external so Electron
+        // loads them directly from node_modules with all their native deps intact.
+        external: ['canvas', 'better-sqlite3']
       }
     }
   },
