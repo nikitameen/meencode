@@ -14,6 +14,7 @@ import { buildContextBlock, type IDEContext } from '../agentContext'
 import { appendHistory } from '../workspaceMemory'
 import * as sessionStore from '../sessionStore'
 import type { AgentMessage, ToolCall, ToolDef } from '../../shared/agent/types'
+import { buildWorkspaceSnapshot, snapshotMarkdown, snapshotReadFile, refreshSnapshotEntryIfChanged } from '../workspaceSnapshot'
 
 /** role-based model routing: respect per-agent overrides, then cheap vs big model defaults */
 function modelForAgent(agent: SubAgentName | 'orchestrator', settings: Settings): string {
@@ -292,6 +293,15 @@ Do not include greetings or explanations outside the bullet points.`
   private async enrichContext(text: string, attachedFile?: string | null, ide?: IDEContext | null): Promise<string> {
     let out = text
     const root = this.root!
+    const isFirstTurn = this.history.length === 0
+
+    // On the very first turn, pre-load a snapshot of the workspace so the agent
+    // starts with a rich understanding. On follow-up turns, rely on history.
+    if (isFirstTurn) {
+      await buildWorkspaceSnapshot(root)
+      const snap = snapshotMarkdown(root)
+      if (snap) out += `\n\n${snap}`
+    }
 
     // full auto-context: IDE state, git, workspace memory, relevant code, last failure
     try {
@@ -309,18 +319,20 @@ Do not include greetings or explanations outside the bullet points.`
     // base (agentContext.buildContextBlock) — seeded from those files and
     // managed in SQLite. No file reads here anymore.
 
-    // @file mentions
+    // @file mentions: on follow-up turns, only re-read if the file changed since
+    // it was last injected into context.
     const mentions = [...text.matchAll(/@([\w./-]+\.[\w]+)/g)].map((m) => m[1])
     for (const rel of [...new Set(mentions)].slice(0, 5)) {
       try {
         const abs = path.resolve(root, rel)
         if (!abs.startsWith(path.resolve(root))) continue
+        if (!isFirstTurn && !this.fileMentionChanged(root, rel)) continue
         const file = await readFileCached(abs, 6000)
         if (file) out += `\n\n--- @${rel} ---\n${file}`
       } catch { /* skip missing */ }
     }
 
-    // @codebase keyword search
+    // @codebase keyword search (always fresh because it is a search query)
     if (/@codebase\b/i.test(text)) {
       const query = text.replace(/@codebase\b/gi, '').trim()
       const hits = this.searchCodebase(query || text, 25)
@@ -330,15 +342,26 @@ Do not include greetings or explanations outside the bullet points.`
       }
     }
 
-    // attached current file
+    // attached current file: on follow-up turns, only re-read if changed.
     if (attachedFile) {
       try {
         const abs = path.resolve(root, attachedFile)
-        const file = await readFileCached(abs, 8000)
-        if (file) out += `\n\n--- Attached file: ${attachedFile} ---\n${file}`
+        if (isFirstTurn || this.fileMentionChanged(root, attachedFile)) {
+          const file = await readFileCached(abs, 8000)
+          if (file) out += `\n\n--- Attached file: ${attachedFile} ---\n${file}`
+        }
       } catch { /* ignore missing attachment */ }
     }
     return out
+  }
+
+  private fileMentionChanged(root: string, rel: string): boolean {
+    try {
+      const st = fs.statSync(path.resolve(root, rel))
+      const snap = snapshotReadFile(root, rel)
+      if (!snap) return true
+      return snap.mtimeMs !== st.mtimeMs || snap.size !== st.size
+    } catch { return true }
   }
 
   private searchCodebase(query: string, limit: number): { path: string; line: number; text: string }[] {

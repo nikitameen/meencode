@@ -130,7 +130,12 @@ You have NO write tools — delegate edits to a coder. Keep replies concise. Rep
 
 A pre-built index of the workspace is available via search_codebase (fast keyword retrieval). Prefer it over grep when exploring concepts; use grep for exact string/regex matches.
 
-Every user message arrives with an auto-attached context block (IDE state, git state, workspace overview, possibly relevant code). Use it; do not re-explore what is already in context.`
+Every user message arrives with an auto-attached context block (IDE state, git state, workspace overview, possibly relevant code). Use it; do not re-explore what is already in context.
+
+CONTEXT EFFICIENCY — follow strictly:
+- On the first user turn, the workspace snapshot (README, configs, entry points, key source files) is already injected. You already know the project structure.
+- On follow-up turns, unchanged @file mentions and the active attached file are NOT re-injected. Do not re-read them unless you suspect they changed or the user explicitly asks.
+- Trust your history and the persistent context. Only read files that are new, changed, or directly needed for the current step.`
 }
 
 // ---------------- plan parsing ----------------

@@ -6,6 +6,7 @@ import { getSettings } from './settingsStore'
 import { indexWorkspace, memory, enrichMemoryWithLLM, isMemoryStale, type MemoryStats } from './workspaceMemory'
 import { setIndex } from './agent/codebaseIndexBridge'
 import { buildLocalVocab } from './agent/localComplete'
+import { buildWorkspaceSnapshot } from './workspaceSnapshot'
 
 let indexing = false
 let lastKey = ''
@@ -42,6 +43,10 @@ export async function autoIndex(force = false): Promise<MemoryStats | null> {
     })
     lastKey = key
     buildLocalVocab(roots[0])
+    // pre-read key files into a lightweight in-memory snapshot so follow-up prompts feel instant
+    for (const root of roots) {
+      void buildWorkspaceSnapshot(root)
+    }
     emit({ phase: 'done', stats })
     // LLM project brief: background, best-effort — deterministic memory is already usable
     void enrichBrief()

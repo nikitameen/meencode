@@ -90,3 +90,9 @@ export function readFileCachedSync(abs: string, maxChars = 8000): string {
 export function invalidateFileCache(abs: string): void {
   cache.set(abs, { content: '', mtimeMs: -1, size: -1, ts: Date.now() })
 }
+
+export function cacheHitInfo(abs: string): { mtimeMs: number; size: number } | null {
+  const e = cache.get(abs)
+  if (!e) return null
+  return { mtimeMs: e.mtimeMs, size: e.size }
+}
