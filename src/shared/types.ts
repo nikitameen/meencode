@@ -57,7 +57,7 @@ type AgentEventBase =
   | { type: 'run_start'; runId: string }
   | { type: 'token'; text: string }
   | { type: 'thinking'; text: string }
-  | { type: 'message'; role: ChatRole; content: string }
+  | { type: 'message'; role: ChatRole; content: string; runId?: string }
   | { type: 'tool_start'; id: string; agent: string; name: string; args: unknown }
   | { type: 'tool_end'; id: string; agent: string; name: string; ok: boolean; result: string; ms: number }
   | { type: 'subagent_start'; agent: string; task: string }

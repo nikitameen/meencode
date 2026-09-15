@@ -28,6 +28,8 @@ export interface ToolkitHooks {
   autoRun(): boolean
   onCommandSpawn?(child: import('node:child_process').ChildProcess, onStop: () => void): void
   onCommandClose?(child: import('node:child_process').ChildProcess): void
+  /** Called when the user edits a file that the agent changed in this run, so the agent can learn from the correction. */
+  onUserCorrection?(workspace: string | null, relPath: string, agentAfter: string, userAfter: string, runId: string): void
 }
 
 export class Toolkit {
@@ -60,6 +62,11 @@ export class Toolkit {
 
   /** primary root (kept for cwd of commands / checkpoint storage) */
   root: string
+
+  private workspaceForLearning(rel: string): string | null {
+    // For multi-root, rel starts with "N:"; we keep the primary root as workspace scope.
+    return this.roots[0] ?? null
+  }
 
   // ---------- public helpers ----------
 
@@ -523,6 +530,9 @@ export class Toolkit {
     }
     this.changes.set(rel, change)
     this.hooks.onFileChange(change)
+    if (kind === 'modified' && existing && existing.after != null && after != null && after !== existing.after) {
+      this.hooks.onUserCorrection?.(this.workspaceForLearning(rel), rel, existing.after, after, this.runId)
+    }
   }
 
   private async checkpoint(abs: string, before: string | null) {

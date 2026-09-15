@@ -68,6 +68,8 @@ const api = {
     revert: (sessionId: string, path: string) => ipcRenderer.invoke('agent:revert', sessionId, path) as Promise<boolean>,
     revertAll: (sessionId: string) => ipcRenderer.invoke('agent:revertAll', sessionId) as Promise<number>,
     changes: (sessionId: string) => ipcRenderer.invoke('agent:changes', sessionId) as Promise<import('../shared/types').FileChange[]>,
+    feedback: (sessionId: string, messageId: string, runId: string, kind: 'positive' | 'negative', comment?: string) => ipcRenderer.invoke('agent:feedback', sessionId, messageId, runId, kind, comment) as Promise<boolean>,
+    correction: (sessionId: string, relPath: string, agentAfter: string, userAfter: string, runId: string) => ipcRenderer.invoke('agent:correction', sessionId, relPath, agentAfter, userAfter, runId) as Promise<boolean>,
     onEvent: (cb: EventCb<AgentEvent>) => subscribe('agent:event', cb)
   },
   sessions: {

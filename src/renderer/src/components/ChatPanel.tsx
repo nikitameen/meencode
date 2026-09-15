@@ -339,6 +339,7 @@ function FeedItemView({ item }: { item: import('../store').FeedItem }) {
             <Markdownish text={item.text} />
             {item.streaming && <span className="caret" />}
           </div>
+          {!item.streaming && <FeedbackBar messageId={item.id} runId={item.runId} feedback={item.feedback} />}
         </div>
       )
     case 'tool':
@@ -492,6 +493,31 @@ function ChangeCard({ path, kind }: { path: string; kind: string }) {
           <Icon name="revert" size={11} />
         </button>
       </span>
+    </div>
+  )
+}
+
+function FeedbackBar({ messageId, runId, feedback }: { messageId: string; runId?: string; feedback?: 'positive' | 'negative' | null }) {
+  const sendFeedback = useStore((s) => s.feedback)
+  if (!runId) return null
+  if (feedback) {
+    return (
+      <div className="feedback-bar">
+        <span className={`feedback-sent ${feedback}`}>
+          <Icon name={feedback === 'positive' ? 'check' : 'x'} size={10} />
+          {feedback === 'positive' ? 'Thanks — I will learn from this.' : 'Noted — I will do better next time.'}
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div className="feedback-bar">
+      <button className="feedback-btn up" title="Good response" onClick={() => void sendFeedback(messageId, runId, 'positive')}>
+        <Icon name="thumbUp" size={12} />
+      </button>
+      <button className="feedback-btn down" title="Bad response" onClick={() => void sendFeedback(messageId, runId, 'negative')}>
+        <Icon name="thumbDown" size={12} />
+      </button>
     </div>
   )
 }

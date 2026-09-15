@@ -15,6 +15,7 @@ import { appendHistory } from '../workspaceMemory'
 import * as sessionStore from '../sessionStore'
 import type { AgentMessage, ToolCall, ToolDef } from '../../shared/agent/types'
 import { buildWorkspaceSnapshot, snapshotMarkdown, snapshotReadFile, refreshSnapshotEntryIfChanged } from '../workspaceSnapshot'
+import { buildLearningBlock } from '../learningStore'
 
 /** role-based model routing: respect per-agent overrides, then cheap vs big model defaults */
 function modelForAgent(agent: SubAgentName | 'orchestrator', settings: Settings): string {
@@ -68,6 +69,11 @@ export class AgentSession {
         onCommandClose: (child) => {
           this.activeCommands.delete(child)
           this.commandStopHandlers.delete(child)
+        },
+        onUserCorrection: (workspace, relPath, agentAfter, userAfter, runId) => {
+          const { addCorrection, invalidateLearningCache } = require('../learningStore') as typeof import('../learningStore')
+          addCorrection(workspace, relPath, agentAfter, userAfter, runId)
+          invalidateLearningCache()
         }
       })
     } else {
@@ -150,7 +156,7 @@ export class AgentSession {
           signal: controller.signal,
           shouldStop: () => this.stopRequested
         },
-        orchestratorSystemPrompt(this.root, `${os.platform()}-${os.arch()}`),
+        this.buildSystemPrompt(),
         this.history
       )
       this.history.push(...result.newMessages)
@@ -169,13 +175,14 @@ export class AgentSession {
           role: 'assistant',
           content: result.aborted
             ? 'Stopped. I kept everything I read this run — tell me to continue and I will pick up where I left off.'
-            : `Run error: ${result.error}`
+            : `Run error: ${result.error}`,
+          runId
         })
         this.emit({ type: 'run_end', runId, error: result.aborted ? 'aborted' : result.error })
         return
       }
 
-      this.emit({ type: 'message', role: 'assistant', content: result.content })
+      this.emit({ type: 'message', role: 'assistant', content: result.content, runId })
       // persist to SQLite + markdown history
       if (this.sessionId && sessionStore.isSessionDbReady()) {
         sessionStore.appendMessage(this.sessionId, 'assistant', result.content)
@@ -340,6 +347,13 @@ Do not include greetings or explanations outside the bullet points.`
 
   private searchCodebase(query: string, limit: number): { path: string; line: number; text: string }[] {
     return searchCodebaseIndex(query, limit)
+  }
+
+  private buildSystemPrompt(): string {
+    const base = orchestratorSystemPrompt(this.root ?? '', `${os.platform()}-${os.arch()}`)
+    const learned = buildLearningBlock(this.root ?? null)
+    if (!learned) return base
+    return `${base}\n\n${learned}`
   }
 
   reset() {

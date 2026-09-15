@@ -312,6 +312,22 @@ a { color: var(--accent); cursor: pointer; }
 .msg { display: flex; flex-direction: column; }
 .msg-bubble { padding: 10px 12px; border-radius: var(--radius); font-size: 13px; line-height: 1.55; user-select: text; }
 .user-bubble { background: var(--accent-dim); border: 1px solid #35598f; align-self: flex-end; max-width: 88%; white-space: pre-wrap; }
+.feedback-bar {
+  display: flex; align-items: center; gap: 6px; margin-top: 6px; padding: 0 2px;
+  opacity: 0.7; transition: opacity 0.15s;
+}
+.msg.assistant:hover .feedback-bar { opacity: 1; }
+.feedback-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 22px; border-radius: 5px; border: 1px solid var(--border-light);
+  background: var(--bg2); color: var(--dim); cursor: pointer;
+}
+.feedback-btn:hover { background: var(--bg3); color: var(--fg); }
+.feedback-btn.up:hover { color: var(--green); border-color: var(--green); }
+.feedback-btn.down:hover { color: var(--red); border-color: var(--red); }
+.feedback-sent { font-size: 11px; color: var(--dim); display: inline-flex; align-items: center; gap: 5px; }
+.feedback-sent.positive { color: var(--green); }
+.feedback-sent.negative { color: var(--red); }
 .assistant-bubble { background: var(--bg2); border: 1px solid var(--border); max-width: 100%; }
 .msg-md p { margin: 2px 0; white-space: pre-wrap; }
 .msg-md p:empty { display: none; }

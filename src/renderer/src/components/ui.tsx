@@ -3,6 +3,7 @@ export type IconName =
   | 'x' | 'revert' | 'sparkle' | 'chevronDown' | 'chevronRight' | 'chevronLeft' | 'plus' | 'plusFolder' | 'refresh'
   | 'search' | 'attach' | 'send' | 'min' | 'max' | 'close' | 'eye' | 'eyeOff' | 'alert' | 'review'
     | 'external' | 'spinner' | 'dot' | 'git' | 'import' | 'browser' | 'dots' | 'edit' | 'tool' | 'mcp'
+  | 'thumbUp' | 'thumbDown'
 
 export function Icon({ name, size = 14 }: { name: IconName; size?: number }) {
   const p: Record<IconName, React.ReactNode> = {
@@ -43,7 +44,9 @@ export function Icon({ name, size = 14 }: { name: IconName; size?: number }) {
     browser: <g fill="none" strokeWidth="1.3"><circle cx="8" cy="8" r="6.4" /><path d="M1.6 8h12.8M8 1.6c2.2 1.8 2.2 11 0 12.8M8 1.6c-2.2 1.8-2.2 11 0 12.8" /></g>,
     dots: <g><circle cx="3.5" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="12.5" cy="8" r="1.3" /></g>,
     tool: <path d="M3 2.5h2.5v4H3v-4Zm5.5 0h2.5v9H8.5v-9Zm5.5 0H16v6h-2v-6Z" />,
-    mcp: <path d="M8 1l3.5 2v4L8 9 4.5 7V3L8 1Zm0 1.7L5.5 4v2.5L8 8.3l2.5-1.8V4L8 2.7Z" />
+    mcp: <path d="M8 1l3.5 2v4L8 9 4.5 7V3L8 1Zm0 1.7L5.5 4v2.5L8 8.3l2.5-1.8V4L8 2.7Z" />,
+    thumbUp: <path d="M5 12.5V6.5h2.5l2-4.5c.2-.5.8-.5 1 0l.5 1c.2.5 0 1-.5 1h3.5c.6 0 1 .4 1 1v1c0 .2 0 .3-.1.4l-2 5c-.2.5-.7.8-1.2.8H5ZM3.5 6.5h-1c-.3 0-.5.2-.5.5v5c0 .3.2.5.5.5h1c.3 0 .5-.2.5-.5V7c0-.3-.2-.5-.5-.5Z" />,
+    thumbDown: <path d="M11 3.5v6h-2.5l-2 4.5c-.2.5-.8.5-1 0l-.5-1c-.2-.5 0-1 .5-1H2.5c-.6 0-1-.4-1-1v-1c0-.2 0-.3.1-.4l2-5c.2-.5.7-.8 1.2-.8H11Zm1.5 6h1c.3 0 .5-.2.5-.5v-5c0-.3-.2-.5-.5-.5h-1c-.3 0-.5.2-.5.5v5c0 .3.2.5.5.5Z" />
   }
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" className={`icon icon-${name}`} aria-hidden>

@@ -7,6 +7,7 @@ import { SessionManager } from './agentSessions'
 import { disposeAllPty } from './ptyService'
 import { initSessionDb, pruneSessions, getDb } from './sessionStore'
 import { ensureKnowledge } from './knowledgeStore'
+import { initLearning } from './learningStore'
 
 function loadDotEnv(): void {
   try {
@@ -80,12 +81,13 @@ if (!app.requestSingleInstanceLock()) {
     loadSettings()
     createWindow()
     // session DB (SQLite) — failures degrade gracefully (no persistence)
-    void initSessionDb()
-      .then(() => {
-        pruneSessions()
-        ensureKnowledge(getSettings().workspace)
-      })
-      .catch((e) => console.warn('session DB unavailable:', e?.message ?? e))
+  void initSessionDb()
+    .then(() => {
+      pruneSessions()
+      ensureKnowledge(getSettings().workspace)
+      initLearning(getSettings().workspace)
+    })
+    .catch((e) => console.warn('session DB unavailable:', e?.message ?? e))
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })

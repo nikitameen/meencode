@@ -4,7 +4,7 @@ import type { AgentEvent, FileChange, FileNode, PlanStep, Settings } from '../..
 
 export type FeedItem =
   | { id: string; kind: 'user'; text: string }
-  | { id: string; kind: 'assistant'; text: string; thinking?: string; streaming?: boolean }
+  | { id: string; kind: 'assistant'; text: string; thinking?: string; streaming?: boolean; runId?: string; feedback?: 'positive' | 'negative' | null }
   | { id: string; kind: 'tool'; agent: string; name: string; argsSummary: string; status: 'running' | 'ok' | 'error'; result?: string; ms?: number }
   | { id: string; kind: 'subagent'; agent: string; task: string; state: 'start' | 'end'; summary?: string }
   | { id: string; kind: 'plan'; steps: PlanStep[] }
@@ -86,6 +86,7 @@ interface Actions {
   keepChange(path: string): void
   approve(id: string, ok: boolean): Promise<void>
   stop(): void
+  feedback(messageId: string, runId: string, kind: 'positive' | 'negative', comment?: string): Promise<void>
   clearChat(): void
   set<K extends keyof State>(key: K, value: State[K]): void
   toggleTerminal(): void
@@ -250,10 +251,10 @@ export const useStore = create<State & Actions>((set, get) => ({
           const exists = cur && feed.some((f) => f.id === cur && f.kind === 'assistant')
           if (exists) {
             updateSession({
-              feed: feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: e.content, streaming: false } : f))
+              feed: feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: e.content, streaming: false, runId: e.runId } : f))
             })
           } else {
-            updateSession({ feed: [...feed, { id: uid(), kind: 'assistant', text: e.content }] })
+            updateSession({ feed: [...feed, { id: uid(), kind: 'assistant', text: e.content, runId: e.runId }] })
           }
           updateSession({ currentAssistantId: null })
         }
@@ -492,6 +493,20 @@ export const useStore = create<State & Actions>((set, get) => ({
     const s = get()
     const active = s.activeSessionId
     if (active) window.meencode.agent.stop(active)
+  },
+
+  async feedback(messageId: string, runId: string, kind: 'positive' | 'negative', comment?: string) {
+    const s = get()
+    const active = s.activeSessionId
+    if (!active) return
+    await window.meencode.agent.feedback(active, messageId, runId, kind, comment)
+    set({
+      sessions: s.sessions.map((sess) =>
+        sess.id === active
+          ? { ...sess, feed: sess.feed.map((f) => (f.id === messageId && f.kind === 'assistant' ? { ...f, feedback: kind } : f)) }
+          : sess
+      )
+    })
   },
 
   async revertChange(path) {

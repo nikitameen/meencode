@@ -16,6 +16,7 @@ import { bindIndexWindow, autoIndex, isIndexing } from './indexingService'
 import { memory, updateFile, dropFile } from './workspaceMemory'
 import * as sessionStore from './sessionStore'
 import * as knowledgeStore from './knowledgeStore'
+import * as learningStore from './learningStore'
 
 const IGNORED = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.meencode', '__pycache__',
@@ -261,6 +262,24 @@ export function registerIPC(mainWindow: BrowserWindow, sessionManager: SessionMa
   ipcMain.handle('agent:revert', (_e, sessionId: string, scoped: string) => sessions.revert(sessionId, toLegacyRel(scoped)))
   ipcMain.handle('agent:revertAll', (_e, sessionId: string) => sessions.revertAll(sessionId))
   ipcMain.handle('agent:changes', (_e, sessionId: string) => sessions.getChanges(sessionId))
+  ipcMain.handle('agent:feedback', (_e, sessionId: string, messageId: string, runId: string, kind: 'positive' | 'negative', comment?: string) => {
+    learningStore.addFeedback(sessionId, messageId, runId, kind, comment)
+    const s = getSettings()
+    if (s.workspace && s.apiKey) {
+      void learningStore.distillRules(s.workspace, { apiKey: s.apiKey, baseUrl: s.baseUrl, fastModel: s.fastModel || s.model })
+    }
+    return true
+  })
+  ipcMain.handle('agent:correction', (_e, _sessionId: string, relPath: string, agentAfter: string, userAfter: string, runId: string) => {
+    const s = getSettings()
+    if (!s.workspace) return false
+    learningStore.addCorrection(s.workspace, relPath, agentAfter, userAfter, runId)
+    learningStore.invalidateLearningCache()
+    if (s.apiKey) {
+      void learningStore.distillRules(s.workspace, { apiKey: s.apiKey, baseUrl: s.baseUrl, fastModel: s.fastModel || s.model })
+    }
+    return true
+  })
 
   // ---------- terminal ----------
   ipcMain.handle('exec:run', (_e, command: string) => {
