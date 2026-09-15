@@ -134,6 +134,10 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
 
     final = res.content ?? ''
     if (final) messages.push({ role: 'assistant', content: final })
+    // If the assistant returned a final message but also asked the user what to do,
+    // it has not finished the task. Force another turn by continuing the loop.
+    const asksToStop = /\b(should I continue|do you want me to proceed|shall I continue|want me to continue|what do you think|is this what you wanted|should I go on|need me to continue)\b/i.test(final)
+    if (asksToStop) continue
     break
     }
   } catch (e: any) {
