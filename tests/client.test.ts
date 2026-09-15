@@ -114,15 +114,18 @@ describe('agent loop', () => {
     expect(res.newMessages.at(-1)).toEqual({ role: 'assistant', content: 'All done!' })
   })
 
-  it('stops at max iterations', async () => {
-    const chat = vi.fn().mockResolvedValue({ content: '', toolCalls: [{ id: 'x', name: 'loop', args: {} }] })
+  it('runs until the model returns a final answer without iteration limit', async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({ content: '', toolCalls: [{ id: 'x', name: 'loop', args: {} }] })
+      .mockResolvedValueOnce({ content: 'done', toolCalls: [] })
     const res = await runLoop(
-      { chat: chat as any, tools: noopTools, execute: async () => 'ok', emit, agent: 'orchestrator', maxIterations: 3, signal: new AbortController().signal },
+      { chat: chat as any, tools: noopTools, execute: async () => 'ok', emit, agent: 'orchestrator', maxIterations: 1000, signal: new AbortController().signal },
       'sys',
       [{ role: 'user', content: 'go' }]
     )
-    expect(chat).toHaveBeenCalledTimes(3)
-    expect(res.content).toMatch(/max tool iterations/i)
+    expect(chat).toHaveBeenCalledTimes(2)
+    expect(res.content).toBe('done')
   })
 
   it('converts execute throw into an error tool result', async () => {

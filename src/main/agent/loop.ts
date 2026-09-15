@@ -27,8 +27,6 @@ export interface LoopResult {
   aborted?: boolean
   /** set when the run threw; newMessages holds partial learnings gathered so far */
   error?: string
-  /** set when the loop hit maxIterations and a fresh iteration is needed */
-  hitIterationLimit?: boolean
 }
 
 const HISTORY_TOOL_CAP = 2500
@@ -43,11 +41,12 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
   const messages: AgentMessage[] = [{ role: 'system', content: system }, ...history]
   let final = ''
   let toolCallsMade = 0
-  const t0 = Date.now()
 
   const shouldStop = deps.shouldStop ?? (() => false)
+  // Internal safety valve only — high enough that normal tasks never hit it.
+  const MAX_LOOPS = 1000
   try {
-    for (let i = 0; i < deps.maxIterations; i++) {
+    for (let loop = 0; loop < MAX_LOOPS; loop++) {
       if (shouldStop() || deps.signal.aborted) {
         throw new Error('aborted')
       }
@@ -150,14 +149,8 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
     }
   }
 
-  const hitLimit = !final
-  if (hitLimit) {
-    final = `(Reached max tool iterations — ${deps.maxIterations}. Elapsed ${((Date.now() - t0) / 1000).toFixed(1)}s. Asking to continue with a summarized context.)`
-    messages.push({ role: 'assistant', content: final })
-  }
-
   // messages = [system, ...history, ...newThisRun]; return ONLY this run's messages
-  return { content: final, newMessages: messages.slice(1 + history.length), toolCallsMade, hitIterationLimit: hitLimit }
+  return { content: final, newMessages: messages.slice(1 + history.length), toolCallsMade }
 }
 
 export function compactHistory(history: AgentMessage[], keep = 30): AgentMessage[] {

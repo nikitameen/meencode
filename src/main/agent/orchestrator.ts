@@ -102,7 +102,6 @@ export class AgentSession {
     }
     this.busy = true
     this.clearStop()
-    this.resumeCount = 0
     const controller = new AbortController()
     this.controller = controller
     this.toolkit!.runId = runId
@@ -176,12 +175,6 @@ export class AgentSession {
         return
       }
 
-      if (result.hitIterationLimit) {
-        // Summarize progress and start a fresh iteration so long tasks can keep going.
-        await this.summarizeAndResume(runId, text, settings, result.toolCallsMade)
-        return
-      }
-
       this.emit({ type: 'message', role: 'assistant', content: result.content })
       // persist to SQLite + markdown history
       if (this.sessionId && sessionStore.isSessionDbReady()) {
@@ -200,88 +193,6 @@ export class AgentSession {
       this.controller = null
     }
     this.emit({ type: 'run_end', runId })
-  }
-
-  // ---------------- context summarization + resume ----------------
-
-  private resumeCount = 0
-  private readonly MAX_RESUMES = 2
-
-  private async summarizeAndResume(runId: string, originalText: string, settings: Settings, toolCallsMade: number): Promise<void> {
-    // If the agent hit the iteration limit without taking any actions, it is
-    // probably stuck in an analysis loop or the task is already vague. Do not
-    // auto-resume; ask the user for clarification instead of burning more tokens.
-    if (toolCallsMade === 0) {
-      const note = `I reached the thinking limit without taking any action. Could you clarify or narrow down what you'd like me to do?`
-      this.emit({ type: 'message', role: 'assistant', content: note })
-      if (this.sessionId && sessionStore.isSessionDbReady()) {
-        sessionStore.appendMessage(this.sessionId, 'assistant', note)
-      }
-      this.emit({ type: 'run_end', runId, error: 'iteration-limit-no-progress' })
-      return
-    }
-
-    if (this.resumeCount >= this.MAX_RESUMES) {
-      const note = `I've used several thinking cycles and haven't finished yet. Please check my progress or tell me how to continue.`
-      this.emit({ type: 'message', role: 'assistant', content: note })
-      if (this.sessionId && sessionStore.isSessionDbReady()) {
-        sessionStore.appendMessage(this.sessionId, 'assistant', note)
-      }
-      this.emit({ type: 'run_end', runId, error: 'iteration-limit-resume-capped' })
-      return
-    }
-    this.resumeCount++
-
-    const summary = await this.summarizeContext(settings)
-    this.emit({ type: 'message', role: 'assistant', content: `Reached the iteration limit for this step. I'm summarizing what was done and continuing with a fresh context.\n\n**Summary so far:**\n${summary}` })
-
-    // Preserve the most recent actual tool results so the resumed agent doesn't
-    // have to re-read the same files. Drop everything older to keep context lean.
-    const recentTail = compactHistoryBytes(this.history.slice(-12), 8, 20000)
-    const resumeMessage: AgentMessage = {
-      role: 'user',
-      content: `Continue the following task from where it left off.\n\nOriginal request:\n${originalText}\n\nSummary of progress so far:\n${summary}\n\nContinue working toward the goal. Do not repeat steps already completed unless verification is needed.`
-    }
-    this.history = compactHistory([...recentTail, resumeMessage], 10)
-
-    const newRunId = randomUUID().slice(0, 8)
-    this.toolkit!.runId = newRunId
-    this.emit({ type: 'run_start', runId: newRunId })
-
-    try {
-      const result = await runLoop(
-        {
-          chat: (msgs, tools, signal, cb) =>
-            new OllamaCloudClient({
-              apiKey: settings.apiKey,
-              baseUrl: settings.baseUrl,
-              model: modelForAgent('orchestrator', settings)
-            }).chat(msgs, tools, signal, cb),
-          tools: this.orchestratorTools(),
-          execute: (call) => this.executeOrchestratorTool(call, settings, newRunId),
-          emit: (e) => this.emit(e),
-          agent: 'orchestrator',
-          maxIterations: settings.maxIterations,
-          signal: this.controller?.signal ?? new AbortController().signal,
-          shouldStop: () => this.stopRequested
-        },
-        orchestratorSystemPrompt(this.root!, `${os.platform()}-${os.arch()}`),
-        this.history
-      )
-      this.history.push(...result.newMessages)
-      this.history = compactHistoryBytes(this.history)
-      if (result.aborted || result.error) {
-        this.emit({ type: 'message', role: 'assistant', content: result.aborted ? 'Stopped during resume.' : `Resume error: ${result.error}` })
-        this.emit({ type: 'run_end', runId: newRunId, error: result.aborted ? 'aborted' : result.error })
-        return
-      }
-      this.emit({ type: 'message', role: 'assistant', content: result.content })
-      if (this.sessionId && sessionStore.isSessionDbReady()) {
-        sessionStore.appendMessage(this.sessionId, 'assistant', result.content)
-      }
-    } catch (e: any) {
-      this.emit({ type: 'run_end', runId: newRunId, error: e?.message ?? String(e) })
-    }
   }
 
   private async summarizeContext(settings: Settings): Promise<string> {
