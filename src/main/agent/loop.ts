@@ -16,6 +16,7 @@ export interface LoopDeps {
   agent: string
   maxIterations: number
   signal: AbortSignal
+  shouldStop?(): boolean
 }
 
 export interface LoopResult {
@@ -44,8 +45,12 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
   let toolCallsMade = 0
   const t0 = Date.now()
 
+  const shouldStop = deps.shouldStop ?? (() => false)
   try {
     for (let i = 0; i < deps.maxIterations; i++) {
+      if (shouldStop() || deps.signal.aborted) {
+        throw new Error('aborted')
+      }
       // Keep the live message window bounded so very long runs do not bloat RAM.
       if (messages.length > 20) {
         const compacted = compactHistoryBytes(messages, 16, MAX_HISTORY_CHARS)
@@ -56,6 +61,10 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
         onToken: (t) => deps.emit({ type: 'token', text: t }),
         onThinking: (t) => deps.emit({ type: 'thinking', text: t })
       })
+
+      if (shouldStop() || deps.signal.aborted) {
+        throw new Error('aborted')
+      }
 
     if (res.toolCalls.length > 0) {
       messages.push({
@@ -113,6 +122,7 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
         messages.push(...results)
       } else {
         for (const call of res.toolCalls) {
+          if (shouldStop() || deps.signal.aborted) break
           messages.push(await runOne(call))
         }
       }

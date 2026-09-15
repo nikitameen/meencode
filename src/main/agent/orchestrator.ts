@@ -36,6 +36,8 @@ export class AgentSession {
   private controller: AbortController | null = null
   private approvals = new Map<string, (ok: boolean) => void>()
   private sessionId: string | null = null
+  private stopRequested = false
+  private runCommandChild: import('node:child_process').ChildProcess | null = null
   busy = false
   root: string | null = null
   roots: string[] = []
@@ -57,7 +59,8 @@ export class AgentSession {
         onFileChange: (c) => this.emit({ type: 'file_change', change: c }),
         onOutput: (id, chunk, stream) => this.emit({ type: 'command_output', id, chunk, stream }),
         approve: (cmd) => this.requestApproval(cmd),
-        autoRun: () => this.io.getSettings().autoRunCommands
+        autoRun: () => this.io.getSettings().autoRunCommands,
+        onCommandSpawn: (child) => { this.runCommandChild = child }
       })
     } else {
       this.toolkit = null
@@ -90,6 +93,7 @@ export class AgentSession {
       return
     }
     this.busy = true
+    this.clearStop()
     const controller = new AbortController()
     this.controller = controller
     this.toolkit!.runId = runId
@@ -135,7 +139,8 @@ export class AgentSession {
           emit: (e) => this.emit(e),
           agent: 'orchestrator',
           maxIterations: settings.maxIterations,
-          signal: controller.signal
+          signal: controller.signal,
+          shouldStop: () => this.stopRequested
         },
         orchestratorSystemPrompt(this.root, `${os.platform()}-${os.arch()}`),
         this.history
@@ -219,7 +224,8 @@ export class AgentSession {
           emit: (e) => this.emit(e),
           agent: 'orchestrator',
           maxIterations: settings.maxIterations,
-          signal: this.controller?.signal ?? new AbortController().signal
+          signal: this.controller?.signal ?? new AbortController().signal,
+          shouldStop: () => this.stopRequested
         },
         orchestratorSystemPrompt(this.root!, `${os.platform()}-${os.arch()}`),
         this.history
@@ -285,7 +291,22 @@ Do not include greetings or explanations outside the bullet points.`
   }
 
   stop() {
+    this.stopRequested = true
     this.controller?.abort()
+    if (this.runCommandChild) {
+      try { this.runCommandChild.kill('SIGTERM') } catch { /* ignore */ }
+      try {
+        // force-kill after a short grace period if still running
+        setTimeout(() => {
+          try { this.runCommandChild?.kill('SIGKILL') } catch { /* ignore */ }
+        }, 500)
+      } catch { /* ignore */ }
+    }
+  }
+
+  private clearStop() {
+    this.stopRequested = false
+    this.runCommandChild = null
   }
 
   // ---------------- context enrichment (@mentions, @codebase, rules) ----------------
@@ -480,7 +501,8 @@ Do not include greetings or explanations outside the bullet points.`
           emit: (e) => this.emit(e),
           agent: agentName,
           maxIterations: def.maxIterations,
-          signal: this.controller!.signal
+          signal: this.controller!.signal,
+          shouldStop: () => this.stopRequested
         },
         def.system,
         messages.slice(1) // history = the user message

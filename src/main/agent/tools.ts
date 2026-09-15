@@ -26,6 +26,7 @@ export interface ToolkitHooks {
   onOutput(id: string, chunk: string, stream: 'stdout' | 'stderr'): void
   approve(command: string): Promise<boolean>
   autoRun(): boolean
+  onCommandSpawn?(child: import('node:child_process').ChildProcess): void
 }
 
 export class Toolkit {
@@ -428,6 +429,7 @@ export class Toolkit {
       cwd: this.root,
       env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' }
     })
+    this.hooks.onCommandSpawn?.(child)
     let out = ''
     let err = ''
     let killed = false
