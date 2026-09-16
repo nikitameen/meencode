@@ -289,16 +289,17 @@ Do not include greetings or explanations outside the bullet points.`
       if (snap) out += `\n\n${snap}`
       // Prefetch pack: symbol-level slices fused from BM25 + behavior prior,
       // so the agent starts with the right code instead of searching for it.
+      // Pure-local and instant; the LLM expansion runs in the background to
+      // warm the cache for the next run (never blocks the first token).
       try {
-        const settings = this.io.getSettings()
-        let expansions: string[] = []
-        if (settings.apiKey && settings.fastModel) {
-          expansions = await expandQuery(text, {
-            apiKey: settings.apiKey, baseUrl: settings.baseUrl, fastModel: settings.fastModel
-          })
-        }
-        const pack = buildPrefetchPack(this.toolkit?.roots ?? [root], text, { expansions })
+        const pack = buildPrefetchPack(this.toolkit?.roots ?? [root], text, {})
         if (pack) out += `\n\n${pack}`
+        const settings = this.io.getSettings()
+        if (settings.apiKey && settings.fastModel) {
+          void expandQuery(text, {
+            apiKey: settings.apiKey, baseUrl: settings.baseUrl, fastModel: settings.fastModel
+          }).catch(() => {})
+        }
       } catch { /* prefetch must never break a run */ }
     }
 
@@ -463,8 +464,9 @@ Do not include greetings or explanations outside the bullet points.`
 
   private orchestratorTools(): ToolDef[] {
     if (!this.toolkit) return []
-    const readOnly = this.toolkit.defs.filter((d) => ['list_dir', 'read_file', 'search_files', 'grep', 'search_codebase', 'run_command'].includes(d.name))
-    return [...readOnly, SPAWN_AGENT_TOOL]
+    // The lead agent edits directly — no spawn round-trips. Sub-agents stay
+    // available for genuinely large/parallel work via spawn_agent.
+    return [...this.toolkit.defs, SPAWN_AGENT_TOOL]
   }
 
   private async executeOrchestratorTool(call: ToolCall, settings: Settings, runId: string): Promise<string> {

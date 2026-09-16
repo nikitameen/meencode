@@ -6,7 +6,7 @@ Built with Electron + React + Monaco.
 
 ## Highlights
 
-- **Sub-agent team** — a lead orchestrator delegates to specialists: Planner → Coder (per step) → Reviewer → Debugger, with a Researcher for read-only exploration. You watch every step live in chat.
+- **Sub-agent team** — the lead agent edits code directly for fast turnaround; a specialist team (planner, coder, reviewer, debugger, researcher) is available for large parallel work. You watch every step live in chat.
 - **Ollama Cloud only** — streams from `https://api.ollama.com` (OpenAI-compatible `/v1/chat/completions`). No local server needed. Bring any cloud model (`qwen3-coder:480b`, `gpt-oss:120b`, `deepseek-v3.1`, custom tags…).
 - **Real editor** — Monaco with tabs, file tree, fuzzy file open (Ctrl+P), command palette (Ctrl+Shift+P), save, reveal-in-explorer.
 - **Reviewable changes** — every agent edit is tracked with before/after; review diffs side-by-side, revert single files or everything in one click. Checkpoints are also written to `.meencode/checkpoints/`.
