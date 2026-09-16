@@ -7,6 +7,7 @@ import { indexWorkspace, memory, enrichMemoryWithLLM, isMemoryStale, type Memory
 import { setIndex } from './agent/codebaseIndexBridge'
 import { buildLocalVocab } from './agent/localComplete'
 import { buildWorkspaceSnapshot } from './workspaceSnapshot'
+import { indexRoot as sliceIndexRoot, type IndexStats as SliceStats } from './sliceStore'
 
 let indexing = false
 let lastKey = ''
@@ -43,6 +44,8 @@ export async function autoIndex(force = false): Promise<MemoryStats | null> {
     })
     lastKey = key
     buildLocalVocab(roots[0])
+    // symbol-level slice index (BM25 + findSymbol), incremental via per-file hashes
+    await indexSlices(roots)
     // pre-read key files into a lightweight in-memory snapshot so follow-up prompts feel instant
     for (const root of roots) {
       void buildWorkspaceSnapshot(root)
@@ -56,6 +59,25 @@ export async function autoIndex(force = false): Promise<MemoryStats | null> {
     return null
   } finally {
     indexing = false
+  }
+}
+
+/** Slice-store pass over all roots. Best-effort: slice search degrades gracefully when off. */
+async function indexSlices(roots: string[]): Promise<void> {
+  try {
+    const sliceStats: Record<string, SliceStats> = {}
+    for (const root of roots) {
+      const stats = await sliceIndexRoot(path.resolve(root))
+      sliceStats[path.resolve(root)] = stats
+    }
+    console.info(
+      'slice index ready:',
+      Object.entries(sliceStats)
+        .map(([r, s]) => `${r.split(path.sep).pop()}: ${s.slices} slices, ${s.changed} changed, ${s.skipped} skipped (${s.ms}ms)`)
+        .join(' | ')
+    )
+  } catch (e) {
+    console.warn('slice indexing failed:', e instanceof Error ? e.message : String(e))
   }
 }
 

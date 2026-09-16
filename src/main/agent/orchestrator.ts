@@ -16,6 +16,9 @@ import * as sessionStore from '../sessionStore'
 import type { AgentMessage, ToolCall, ToolDef } from '../../shared/agent/types'
 import { buildWorkspaceSnapshot, snapshotMarkdown, snapshotReadFile, refreshSnapshotEntryIfChanged } from '../workspaceSnapshot'
 import { buildLearningBlock } from '../learningStore'
+import { requestHashOf } from '../accessGraph'
+import { buildPrefetchPack } from '../prefetch'
+import { expandQuery } from '../semanticSearch'
 
 /** role-based model routing: respect per-agent overrides, then cheap vs big model defaults */
 function modelForAgent(agent: SubAgentName | 'orchestrator', settings: Settings): string {
@@ -111,6 +114,7 @@ export class AgentSession {
     const controller = new AbortController()
     this.controller = controller
     this.toolkit!.runId = runId
+    this.toolkit!.accessRequestHash = requestHashOf(text)
     this.emit({ type: 'run_start', runId })
 
     // ---- session persistence ----
@@ -283,6 +287,19 @@ Do not include greetings or explanations outside the bullet points.`
       await buildWorkspaceSnapshot(root)
       const snap = snapshotMarkdown(root)
       if (snap) out += `\n\n${snap}`
+      // Prefetch pack: symbol-level slices fused from BM25 + behavior prior,
+      // so the agent starts with the right code instead of searching for it.
+      try {
+        const settings = this.io.getSettings()
+        let expansions: string[] = []
+        if (settings.apiKey && settings.fastModel) {
+          expansions = await expandQuery(text, {
+            apiKey: settings.apiKey, baseUrl: settings.baseUrl, fastModel: settings.fastModel
+          })
+        }
+        const pack = buildPrefetchPack(this.toolkit?.roots ?? [root], text, { expansions })
+        if (pack) out += `\n\n${pack}`
+      } catch { /* prefetch must never break a run */ }
     }
 
     // full auto-context: IDE state, git, workspace memory, relevant code, last failure

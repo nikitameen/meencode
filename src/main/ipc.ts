@@ -14,6 +14,7 @@ import { registerWorkspaceImportIPC } from './workspaceImport'
 import { proxySafeFetch } from './proxyFetch'
 import { bindIndexWindow, autoIndex, isIndexing } from './indexingService'
 import { memory, updateFile, dropFile } from './workspaceMemory'
+import { indexFileContent, deleteFileFromStore, dropRoot } from './sliceStore'
 import * as sessionStore from './sessionStore'
 import * as knowledgeStore from './knowledgeStore'
 import * as learningStore from './learningStore'
@@ -124,6 +125,7 @@ export function registerIPC(mainWindow: BrowserWindow, sessionManager: SessionMa
     const s = removeRoot(abs)
     applyWorkspaceToSessions()
     restartWatchers()
+    dropRoot(abs)
     void autoIndex(true)
     return { ok: true, roots: s.roots }
   })
@@ -431,10 +433,37 @@ async function flushPendingChanges(root: string): Promise<void> {
     if (segs.some((s) => IGNORED.has(s))) continue
     try {
       const st = await fs.promises.stat(abs).catch(() => null)
-      if (st?.isFile()) updateFile(abs)
-      else if (!st) dropFile(abs)
+      if (st?.isFile()) {
+        updateFile(abs)
+        updateSliceFile(abs, root)
+      } else if (!st) {
+        dropFile(abs)
+        dropSliceFile(abs, root)
+      }
     } catch { /* transient */ }
     // yield between files so the main thread stays responsive
     await new Promise((r) => setTimeout(r, 0))
   }
+}
+
+/** Incremental slice-store refresh for one changed file (Merkle skip via content hash). */
+function updateSliceFile(abs: string, root: string): void {
+  try {
+    const absRoot = path.resolve(root)
+    if (!abs.startsWith(absRoot + path.sep)) return
+    const rel = path.relative(absRoot, abs).split(path.sep).join('/')
+    const raw = fs.readFileSync(abs, 'utf8')
+    if (raw.includes('\u0000')) return
+    indexFileContent(absRoot, rel, raw)
+  } catch { /* unreadable / binary */ }
+}
+
+/** Remove a deleted file's slices. */
+function dropSliceFile(abs: string, root: string): void {
+  try {
+    const absRoot = path.resolve(root)
+    if (!abs.startsWith(absRoot + path.sep)) return
+    const rel = path.relative(absRoot, abs).split(path.sep).join('/')
+    deleteFileFromStore(absRoot, rel)
+  } catch { /* ignore */ }
 }

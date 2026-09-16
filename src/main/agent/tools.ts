@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import type { FileChange, ChangeKind } from '../../shared/types'
 import type { ToolDef, ToolCall, ToolCallContext } from '../../shared/agent/types'
 import { searchCodebaseIndex } from './codebaseIndexBridge'
+import { recordAccess, type AccessKind } from '../accessGraph'
 import { recordFailedCommand } from '../agentContext'
 import { semanticSearch } from '../semanticSearch'
 import { getSettings } from '../settingsStore'
@@ -37,10 +38,24 @@ export class Toolkit {
   private changes = new Map<string, FileChange>()
   private checkpointed = new Set<string>()
   runId = 'run'
+  /** request-hash for the access graph (set per run by the orchestrator) */
+  accessRequestHash = ''
+  accessTelemetry = true
 
   constructor(public roots: string[], private hooks: ToolkitHooks) {
     this.root = roots[0] ?? ''
     this.defs = this.buildDefs()
+  }
+
+  /** Telemetry: log a file access into the behavior graph. Fire-and-forget. */
+  private trace(abs: string | null, kind: AccessKind): void {
+    if (!this.accessTelemetry || !abs) return
+    try {
+      const rel = this.toPosix(abs)
+      const ws = this.roots[0] ? path.resolve(this.roots[0]) : null
+      if (!ws || !rel) return
+      recordAccess(ws, this.accessRequestHash || 'adhoc', rel, kind)
+    } catch { /* telemetry must never break a tool */ }
   }
 
   async refreshMCP(): Promise<void> {
@@ -339,6 +354,7 @@ export class Toolkit {
       if (e.code === 'ENOENT') return `Error: file not found: ${userPath}`
       throw e
     }
+    this.trace(abs, 'read')
     const lines = raw.split('\n')
     const total = raw.endsWith('\n') && lines.length > 1 ? lines.length - 1 : lines.length
     const start = Math.max(1, Number(offset) || 1)
@@ -363,6 +379,7 @@ export class Toolkit {
     await fs.promises.writeFile(abs, content)
     const kind: ChangeKind = before == null ? 'created' : 'modified'
     this.record(abs, kind, before, content)
+    this.trace(abs, 'write')
     return `Wrote ${this.toPosix(abs)} (${kind}, ${content.length} bytes) [${ctx.agent}]`
   }
 
@@ -388,6 +405,7 @@ export class Toolkit {
     await fs.promises.writeFile(abs, next)
     const kind: ChangeKind = 'modified'
     this.record(abs, kind, raw, next)
+    this.trace(abs, 'edit')
     const n = replaceAll ? count : 1
     return `Edited ${this.toPosix(abs)}: ${n} replacement${n > 1 ? 's' : ''} made [${ctx.agent}]`
   }
@@ -401,6 +419,7 @@ export class Toolkit {
     await this.checkpoint(abs, before)
     await fs.promises.unlink(abs).catch(() => {})
     this.record(abs, 'deleted', before, null)
+    this.trace(abs, 'delete')
     return `Deleted ${this.toPosix(abs)} [${ctx.agent}]`
   }
 
@@ -428,6 +447,7 @@ export class Toolkit {
     }
     const inc = include ? globToRegex(String(include)) : null
     const matches: string[] = []
+    const grepTrace = new Set<string>()
     let scanned = 0
     for await (const { abs, rel } of this.walk()) {
       if (inc && !inc.test(rel)) continue
@@ -450,8 +470,10 @@ export class Toolkit {
           if (matches.length >= 300 || fileMatches >= 50) break
         }
       }
+      if (fileMatches > 0) grepTrace.add(abs)
       if (matches.length >= 300) break
     }
+    for (const abs of grepTrace) this.trace(abs, 'grep')
     if (matches.length === 0) return `No matches for /${pattern}/ in ${scanned} file(s).`
     return `Matches (${matches.length}, scanned ${scanned} files):\n${matches.join('\n')}`
   }
@@ -535,6 +557,7 @@ export class Toolkit {
     if (!q) return 'Error: query is required'
     const hits = searchCodebaseIndex(q, Math.min(Number(limit) || 25, 60))
     if (hits.length > 0) {
+      this.traceHits(hits.map((h) => h.path), 'search')
       return `Index hits (${hits.length}) for "${q}":\n${hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n')}`
     }
     // thin keyword results -> semantic expansion
@@ -546,7 +569,29 @@ export class Toolkit {
     if (!s.apiKey) return `No index hits for "${q}". The index may be empty — fall back to grep.`
     const hits = await semanticSearch(q, { apiKey: s.apiKey, baseUrl: s.baseUrl, fastModel: s.fastModel }, limit)
     if (hits.length === 0) return `No hits (keyword or semantic) for "${q}". Fall back to grep.`
+    this.traceHits(hits.map((h) => h.path), 'search')
     return `Semantic search results (${hits.length}) for "${q}":\n${hits.map((h) => `${h.path}:${h.line} (via ${h.via}): ${h.text}`).join('\n')}`
+  }
+
+  /** Telemetry for search hits: rel paths may not resolve (multi-root), so resolve leniently. */
+  private traceHits(relPaths: string[], kind: AccessKind): void {
+    if (!this.accessTelemetry) return
+    for (const rel of relPaths.slice(0, 30)) {
+      try {
+        const abs = this.resolveLenient(rel)
+        this.trace(abs, kind)
+      } catch { /* not found — skip */ }
+    }
+  }
+
+  /** Resolve a rel path from search results without throwing on misses. */
+  private resolveLenient(rel: string): string | null {
+    for (const r of this.roots) {
+      const root = path.resolve(r)
+      const abs = path.resolve(root, rel)
+      if (fs.existsSync(abs)) return abs
+    }
+    return null
   }
 
   private async record(abs: string, kind: ChangeKind, before: string | null, after: string | null) {

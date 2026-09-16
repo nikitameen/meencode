@@ -6,6 +6,7 @@ import { loadSettings, getSettings } from './settingsStore'
 import { SessionManager } from './agentSessions'
 import { disposeAllPty } from './ptyService'
 import { initSessionDb, pruneSessions, getDb } from './sessionStore'
+import { initSliceDb, flushSliceDb } from './sliceStore'
 import { ensureKnowledge } from './knowledgeStore'
 import { initLearning } from './learningStore'
 
@@ -86,6 +87,7 @@ if (!app.requestSingleInstanceLock()) {
       loadSettings()
       await initSessionDb()
       pruneSessions()
+      await initSliceDb().catch((e) => console.warn('slice DB unavailable:', e?.message ?? e))
       ensureKnowledge(getSettings().workspace)
       initLearning(getSettings().workspace)
     } catch (e: any) {
@@ -99,6 +101,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('window-all-closed', () => {
     disposeAllPty()
+    flushSliceDb()
     app.quit()
   })
 }
