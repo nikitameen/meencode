@@ -74,7 +74,9 @@ export async function parseSSE(body: ReadableStream, cb: StreamCallbacks): Promi
   let buf = ''
   let content = ''
   const toolAcc = new Map<number, { id: string; name: string; args: string }>()
-  const think = makeThinkSplitter(cb)
+  const think = makeThinkSplitter(cb, (cleanText) => {
+    content += cleanText
+  })
 
   const handleLine = (line: string) => {
     const s = line.trim()
@@ -94,7 +96,6 @@ export async function parseSSE(body: ReadableStream, cb: StreamCallbacks): Promi
       cb.onThinking?.(reasoning)
     }
     if (typeof delta.content === 'string' && delta.content) {
-      content += delta.content
       think.push(delta.content)
     }
     if (Array.isArray(delta.tool_calls)) {
@@ -134,18 +135,22 @@ export async function parseSSE(body: ReadableStream, cb: StreamCallbacks): Promi
 
   // native fallback: models that emit tool calls as text blocks
   const nativeResult = extractNativeToolCalls(content)
-  let clean = nativeResult.content
+  let clean = nativeResult.content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
   for (const c of nativeResult.calls) toolCalls.push(c)
 
-  return { content: clean.trim(), toolCalls }
+  return { content: clean, toolCalls }
 }
 
 // ---------------- <think> tag extraction ----------------
 
-function makeThinkSplitter(cb: StreamCallbacks) {
+function makeThinkSplitter(cb: StreamCallbacks, onCleanText: (s: string) => void) {
   let inThink = false
   let pending = ''
-  const emitText = (s: string) => s && cb.onToken?.(s)
+  const emitText = (s: string) => {
+    if (!s) return
+    onCleanText(s)
+    cb.onToken?.(s)
+  }
   const emitThink = (s: string) => s && cb.onThinking?.(s)
 
   return {

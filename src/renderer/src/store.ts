@@ -222,23 +222,35 @@ export const useStore = create<State & Actions>((set, get) => ({
         updateSession({ busy: true, currentAssistantId: null })
         break
       case 'token': {
-        const cur = sess.currentAssistantId
-        if (cur) {
-          updateSession({
-            feed: feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: f.text + e.text } : f))
-          })
-        } else {
-          const id = uid()
-          updateSession({ currentAssistantId: id, feed: [...feed, { id, kind: 'assistant', text: e.text, streaming: true }] })
+        let cur = sess.currentAssistantId
+        if (!cur) {
+          const lastAss = feed.slice().reverse().find((f) => f.kind === 'assistant' && (f as any).streaming)
+          if (lastAss) {
+            cur = lastAss.id
+            updateSession({ currentAssistantId: cur })
+          } else {
+            const id = uid()
+            updateSession({ currentAssistantId: id, feed: [...feed, { id, kind: 'assistant', text: e.text, streaming: true }] })
+            cur = id
+          }
         }
+        updateSession({
+          feed: get().sessions[targetIdx].feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: f.text + e.text } : f))
+        })
         break
       }
       case 'thinking': {
         let cur = sess.currentAssistantId
         if (!cur) {
-          const id = uid()
-          updateSession({ currentAssistantId: id, feed: [...feed, { id, kind: 'assistant', text: '', thinking: '', streaming: true }] })
-          cur = id
+          const lastAss = feed.slice().reverse().find((f) => f.kind === 'assistant' && (f as any).streaming)
+          if (lastAss) {
+            cur = lastAss.id
+            updateSession({ currentAssistantId: cur })
+          } else {
+            const id = uid()
+            updateSession({ currentAssistantId: id, feed: [...feed, { id, kind: 'assistant', text: '', thinking: '', streaming: true }] })
+            cur = id
+          }
         }
         updateSession({
           feed: get().sessions[targetIdx].feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, thinking: (f.thinking ?? '') + e.text } : f))
@@ -265,7 +277,6 @@ export const useStore = create<State & Actions>((set, get) => ({
         const isMcp = e.name.includes('.')
         const command = isCmd ? String((e.args as any)?.command ?? '') : ''
         updateSession({
-          currentAssistantId: null,
           feed: [
             ...feed,
             {

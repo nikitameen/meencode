@@ -464,13 +464,14 @@ function ErrorCard({ text }: { text: string }) {
 
 function Thinking({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
+  if (!text || !text.trim()) return null
   return (
     <div className="thinking-wrap">
       <button className="thinking-toggle" onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevronDown' : 'chevronRight'} size={10} />
-        Thinking
+        Thinking ({text.trim().split(/\s+/).length} words)
       </button>
-      {open && <pre className="thinking-body">{text}</pre>}
+      {open && <pre className="thinking-body">{text.trim()}</pre>}
     </div>
   )
 }
