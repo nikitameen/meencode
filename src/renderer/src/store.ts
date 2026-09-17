@@ -127,6 +127,16 @@ function getSession(s: State, id?: string | null): { session: ChatSession; index
   return { session: fresh, index: 0 }
 }
 
+function pushBeforeStreamingAssistant(feed: FeedItem[], item: FeedItem): FeedItem[] {
+  const lastIdx = feed.length - 1
+  if (lastIdx >= 0 && feed[lastIdx].kind === 'assistant' && (feed[lastIdx] as any).streaming) {
+    const next = [...feed]
+    next.splice(lastIdx, 0, item)
+    return next
+  }
+  return [...feed, item]
+}
+
 export const useStore = create<State & Actions>((set, get) => ({
   settings: null,
   tree: [],
@@ -218,57 +228,41 @@ export const useStore = create<State & Actions>((set, get) => ({
     const feed = sess.feed
 
     switch (e.type) {
-      case 'run_start':
-        updateSession({ busy: true, currentAssistantId: null })
-        break
-      case 'token': {
-        let cur = sess.currentAssistantId
-        if (!cur) {
-          const lastAss = feed.slice().reverse().find((f) => f.kind === 'assistant' && (f as any).streaming)
-          if (lastAss) {
-            cur = lastAss.id
-            updateSession({ currentAssistantId: cur })
-          } else {
-            const id = uid()
-            updateSession({ currentAssistantId: id, feed: [...feed, { id, kind: 'assistant', text: e.text, streaming: true }] })
-            cur = id
-          }
-        }
+      case 'run_start': {
+        const assistantId = uid()
         updateSession({
-          feed: get().sessions[targetIdx].feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: f.text + e.text } : f))
+          busy: true,
+          currentAssistantId: assistantId,
+          feed: [...feed, { id: assistantId, kind: 'assistant', text: '', thinking: '', streaming: true }]
         })
         break
       }
-      case 'thinking': {
-        let cur = sess.currentAssistantId
-        if (!cur) {
-          const lastAss = feed.slice().reverse().find((f) => f.kind === 'assistant' && (f as any).streaming)
-          if (lastAss) {
-            cur = lastAss.id
-            updateSession({ currentAssistantId: cur })
-          } else {
-            const id = uid()
-            updateSession({ currentAssistantId: id, feed: [...feed, { id, kind: 'assistant', text: '', thinking: '', streaming: true }] })
-            cur = id
-          }
+      case 'token': {
+        const cur = sess.currentAssistantId ?? feed.slice().reverse().find((f) => f.kind === 'assistant' && (f as any).streaming)?.id
+        if (cur) {
+          updateSession({
+            feed: get().sessions[targetIdx].feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: f.text + e.text } : f))
+          })
         }
-        updateSession({
-          feed: get().sessions[targetIdx].feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, thinking: (f.thinking ?? '') + e.text } : f))
-        })
+        break
+      }
+      case 'thinking': {
+        const cur = sess.currentAssistantId ?? feed.slice().reverse().find((f) => f.kind === 'assistant' && (f as any).streaming)?.id
+        if (cur) {
+          updateSession({
+            feed: get().sessions[targetIdx].feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, thinking: (f.thinking ?? '') + e.text } : f))
+          })
+        }
         break
       }
       case 'message': {
         if (e.role === 'assistant') {
-          const cur = sess.currentAssistantId
-          const exists = cur && feed.some((f) => f.id === cur && f.kind === 'assistant')
-          if (exists) {
+          const cur = sess.currentAssistantId ?? feed.slice().reverse().find((f) => f.kind === 'assistant' && (f as any).streaming)?.id
+          if (cur) {
             updateSession({
-              feed: feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: e.content, streaming: false, runId: e.runId } : f))
+              feed: feed.map((f) => (f.id === cur && f.kind === 'assistant' ? { ...f, text: e.content || f.text, streaming: false, runId: e.runId } : f))
             })
-          } else {
-            updateSession({ feed: [...feed, { id: uid(), kind: 'assistant', text: e.content, runId: e.runId }] })
           }
-          updateSession({ currentAssistantId: null })
         }
         break
       }
@@ -276,18 +270,16 @@ export const useStore = create<State & Actions>((set, get) => ({
         const isCmd = e.name === 'run_command'
         const isMcp = e.name.includes('.')
         const command = isCmd ? String((e.args as any)?.command ?? '') : ''
+        const toolItem: FeedItem = {
+          id: e.id,
+          kind: 'tool',
+          agent: e.agent,
+          name: e.name,
+          argsSummary: summarizeArgs(e.name, e.args, isMcp),
+          status: 'running'
+        }
         updateSession({
-          feed: [
-            ...feed,
-            {
-              id: e.id,
-              kind: 'tool',
-              agent: e.agent,
-              name: e.name,
-              argsSummary: summarizeArgs(e.name, e.args, isMcp),
-              status: 'running'
-            }
-          ],
+          feed: pushBeforeStreamingAssistant(feed, toolItem),
           ...(isCmd
             ? { terminal: [...sess.terminal, { id: e.id, agent: e.agent, command, output: '', exit: null, running: true }] }
             : {})
@@ -301,9 +293,11 @@ export const useStore = create<State & Actions>((set, get) => ({
         })
         break
       }
-      case 'subagent_start':
-        updateSession({ feed: [...feed, { id: `sa-${uid()}`, kind: 'subagent', agent: e.agent, task: e.task, state: 'start' }] })
+      case 'subagent_start': {
+        const saItem: FeedItem = { id: `sa-${uid()}`, kind: 'subagent', agent: e.agent, task: e.task, state: 'start' }
+        updateSession({ feed: pushBeforeStreamingAssistant(feed, saItem) })
         break
+      }
       case 'subagent_end': {
         updateSession({
           feed: feed.map((f, i, arr) => {
@@ -320,18 +314,16 @@ export const useStore = create<State & Actions>((set, get) => ({
         })
         break
       }
-      case 'plan':
-        updateSession({ feed: [...feed, { id: uid(), kind: 'plan', steps: e.steps }], plan: e.steps })
+      case 'plan': {
+        const planItem: FeedItem = { id: uid(), kind: 'plan', steps: e.steps }
+        updateSession({ feed: pushBeforeStreamingAssistant(feed, planItem), plan: e.steps })
         break
+      }
       case 'plan_update': {
         updateSession({
           plan: sess.plan.map((p) => (p.id === e.id ? { ...p, status: e.status } : p)),
           feed: feed.map((f) => {
             if (f.kind !== 'plan') return f
-            const idx = feed.reduce((acc, cur, i) => (cur.kind === 'plan' ? i : acc), -1)
-            if (idx === -1) return f
-            const target = feed[idx]
-            if (target.kind !== 'plan' || target.id !== f.id) return f
             return { ...f, steps: (f as any).steps.map((p: PlanStep) => (p.id === e.id ? { ...p, status: e.status } : p)) }
           })
         })
@@ -339,9 +331,10 @@ export const useStore = create<State & Actions>((set, get) => ({
       }
       case 'file_change': {
         const change = e.change
+        const changeItem: FeedItem = { id: `fc-${uid()}`, kind: 'change', change }
         updateSession({
           changes: [...sess.changes.filter((c) => c.change.path !== change.path), { change, status: 'pending' }],
-          feed: [...feed, { id: `fc-${uid()}`, kind: 'change', change }]
+          feed: pushBeforeStreamingAssistant(feed, changeItem)
         })
         void get().openFile(change.path)
         break
@@ -352,13 +345,14 @@ export const useStore = create<State & Actions>((set, get) => ({
         })
         break
       }
-      case 'approval_request':
+      case 'approval_request': {
+        const appItem: FeedItem = { id: e.id, kind: 'approval', command: e.command, state: 'pending' }
         updateSession({
           approvalsPending: sess.approvalsPending + 1,
-          feed: [...feed, { id: e.id, kind: 'approval', command: e.command, state: 'pending' }],
-          currentAssistantId: null
+          feed: pushBeforeStreamingAssistant(feed, appItem)
         })
         break
+      }
       case 'approval_result':
         updateSession({
           approvalsPending: Math.max(0, sess.approvalsPending - 1),
@@ -373,13 +367,17 @@ export const useStore = create<State & Actions>((set, get) => ({
         break
       }
       case 'run_end': {
-        const currentFeed = [...get().sessions[targetIdx].feed]
-        const cur = get().sessions[targetIdx].currentAssistantId
-        if (cur) {
-          const idx = currentFeed.findIndex((f) => f.id === cur)
-          if (idx !== -1 && currentFeed[idx].kind === 'assistant') (currentFeed[idx] as any).streaming = false
+        const cur = sess.currentAssistantId ?? feed.slice().reverse().find((f) => f.kind === 'assistant' && (f as any).streaming)?.id
+        let nextFeed = get().sessions[targetIdx].feed.map((f) => {
+          if (f.kind === 'assistant' && (f.id === cur || (f as any).streaming)) {
+            return { ...f, streaming: false }
+          }
+          return f
+        })
+        nextFeed = nextFeed.filter((f) => !(f.kind === 'assistant' && !f.text && !f.thinking))
+        if (e.error && e.error !== 'aborted') {
+          nextFeed.push({ id: uid(), kind: 'error', text: e.error })
         }
-        const nextFeed = e.error ? [...currentFeed, { id: uid(), kind: 'error' as const, text: e.error }] : currentFeed
         updateSession({ busy: false, currentAssistantId: null, feed: nextFeed, approvalsPending: 0 })
         void get().refreshSavedSessions()
         break
