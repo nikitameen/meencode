@@ -9,7 +9,7 @@ const DEFAULTS: Settings = {
   model: 'glm-5.3-flash',
   fastModel: 'glm-5.3-flash',
   subAgentModels: {},
-  maxIterations: 30,
+  maxIterations: 16,
   autoRunCommands: false,
   workspace: null,
   roots: [],

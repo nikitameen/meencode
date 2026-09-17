@@ -212,4 +212,43 @@ describe('write-immediately integration', () => {
     expect(captured.user).toContain('src/app.ts')
     vi.unstubAllGlobals()
   })
+
+  it('loop TERMINATES when the model stops calling tools (no endless reading)', async () => {
+    // The model reads a few files while narrating "let me check the code..."
+    // (prose that used to trigger the continue-nudge spiral), then answers.
+    // The run must end at the model's decision — not be forced onward.
+    const script: { toolCalls?: { id: string; name: string; args: object }[]; final: string }[] = [
+      { toolCalls: [{ id: 'r1', name: 'read_file', args: { path: 'src/app.ts' } }], final: '' },
+      { toolCalls: [{ id: 'r2', name: 'read_file', args: { path: 'src/settings.ts' } }], final: 'Let me look at the app code next.' },
+      { final: 'The greet function returns "hello " + name in src/app.ts:2.' }
+    ]
+    let chatTurn = 0
+    vi.stubGlobal('fetch', vi.fn(async (_u: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : null
+      if (!body || body.stream !== true) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: '' } }] }), { status: 200 })
+      }
+      const step = script[Math.min(chatTurn, script.length - 1)]
+      chatTurn++
+      if (step.toolCalls?.length) {
+        return sse([
+          ...step.toolCalls.map((c) => toolCallTurn(c.id, c.name, JSON.stringify(c.args))),
+          { choices: [{ index: 0, delta: step.final ? { role: 'assistant', content: step.final } : {} }] }
+        ])
+      }
+      return sse([contentTurn(step.final)])
+    }))
+
+    const t0 = Date.now()
+    await session.send('where is the greeting implemented', null, null, null)
+    const elapsed = Date.now() - t0
+
+    // exactly the scripted turns ran — the loop did NOT add nudge turns
+    expect(chatTurn).toBe(3)
+    // no forced continuation message was injected
+    const runEnd = events.find((e) => e.type === 'run_end')
+    expect(runEnd?.error).toBeUndefined()
+    expect(elapsed).toBeLessThan(15000)
+    vi.unstubAllGlobals()
+  })
 })

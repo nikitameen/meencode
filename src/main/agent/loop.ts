@@ -73,10 +73,12 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
   let toolCallsMade = 0
 
   const shouldStop = deps.shouldStop ?? (() => false)
-  // Internal safety valve only — high enough that normal tasks never hit it.
-  const MAX_LOOPS = 1000
+  // Hard cap from settings (default 25). The model decides when it is done by
+  // simply not calling tools anymore — like Cursor. No narration heuristics,
+  // no "continue" nudges: those caused endless reading loops.
+  const maxLoops = Math.max(1, deps.maxIterations || 25)
   try {
-    for (let loop = 0; loop < MAX_LOOPS; loop++) {
+    for (let loop = 0; loop < maxLoops; loop++) {
       if (shouldStop() || deps.signal.aborted) {
         throw new Error('aborted')
       }
@@ -171,18 +173,9 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
 
     final = res.content ?? ''
     if (final) messages.push({ role: 'assistant', content: final })
-
-    // Decide whether the agent has actually finished the task or is just pausing.
-    const looksIncomplete =
-      !final ||
-      /\b(should I continue|do you want me to proceed|shall I continue|want me to continue|what do you think|is this what you wanted|should I go on|need me to continue)\b/i.test(final) ||
-      /\b(I will|I shall|I need to|I should|next I|next, I|next step|then I|after that|first I|second I|finally I|let me|I am going to)\b/i.test(final) ||
-      /\b(plan|steps?|todo|to do next|remaining|not yet|incomplete|pending|unfinished)\b/i.test(final)
-    const complete = deps.isComplete?.(final, toolCallsMade) ?? !looksIncomplete
-    if (complete) break
-    // Continue looping; append a gentle nudge so the model knows to keep going.
-    messages.push({ role: 'user', content: 'Continue and complete the task. Do not ask me whether to proceed.' })
-    continue
+    // The model chose not to call any tools: the turn is final. No narration
+    // heuristics and no "continue" nudges — those made runs spiral forever.
+    break
     }
   } catch (e: any) {
     // ABORT or mid-run error: return everything learned so far instead of losing it.

@@ -376,19 +376,13 @@ Do not include greetings or explanations outside the bullet points.`
   }
 
   private isRunComplete(finalText: string, toolCallsMade: number): boolean {
-    // If we generated a plan and it is not fully done, the run is not complete.
-    const pendingPlan = this.plan.length > 0 && this.plan.some((p) => p.status !== 'done')
-    if (pendingPlan) {
-      // If the final text is just a summary of progress, keep going.
-      const isProgressSummary = /\b(progress so far|summary|completed:|done:|status|step [\d]+)\b/i.test(finalText)
-      if (isProgressSummary) return false
-      // If the final text mentions the plan, keep going.
-      const planMentioned = /\b(plan|steps?|step)\b/i.test(finalText)
-      if (planMentioned) return false
-    }
-    // Default to the loop's own heuristics by returning true only when there is
-    // a non-empty final answer and no active plan.
-    return finalText.length > 0 && !pendingPlan
+    // Cursor-style: the model is done when it stops calling tools. The only
+    // exception: it produced a final text with zero tool calls the whole run
+    // AND it is clearly mid-plan — rare, and the user can always send a
+    // follow-up. Never override the model's decision to stop.
+    void finalText
+    void toolCallsMade
+    return true
   }
 
   reset() {
