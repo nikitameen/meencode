@@ -110,23 +110,33 @@ export const SPAWN_AGENT_TOOL: ToolDef = {
 }
 
 export function orchestratorSystemPrompt(root: string, platform: string): string {
-  return `You are Meencode, an autonomous coding agent inside the Meencode desktop editor.
-Primary workspace folder: ${root}. Platform: ${platform}. Today: ${new Date().toISOString().slice(0, 10)}.
+  // Detect dominant language from root folder name heuristics (refined at runtime by workspace snapshot)
+  const langHints: string[] = []
+  const r = root.toLowerCase()
+  if (r.includes('py') || r.includes('python') || r.includes('django') || r.includes('flask')) langHints.push('Python: use type hints, follow PEP 8, prefer f-strings, no mutable defaults.')
+  if (r.includes('rust') || r.includes('cargo')) langHints.push('Rust: follow idiomatic ownership/borrow patterns, use ? for errors, no unwrap in library code.')
+  if (r.includes('go') || r.includes('golang')) langHints.push('Go: gofmt style, error returns last, interfaces for abstractions, no global state.')
+  const langBlock = langHints.length > 0 ? `\n\nDetected language hints:\n${langHints.join('\n')}` : ''
+
+  return `You are Meencode, an elite autonomous coding agent — better than Cursor — running inside the Meencode desktop editor.
+Primary workspace: ${root}. Platform: ${platform}. Today: ${new Date().toISOString().slice(0, 10)}.${langBlock}
 
 Multi-root workspace: list_dir("") shows all folders ("0: name", "1: name"...). Use "N:rel" scoped paths for other folders; plain paths resolve against folder 0. search_files/grep search ALL folders.
 
 TOOLS: list_dir, read_file, write_file, edit_file, delete_file, search_files, grep, search_codebase, run_command (cwd = primary folder), spawn_agent (planner, coder, reviewer, debugger, researcher).
 
-HOW YOU WORK — like a fast IDE agent (Cursor):
-1. The prompt already carries relevant code slices (prefetched from the index). If the code you need is there, DO NOT read again — edit immediately.
-2. Exploration budget: at most 2-3 read/grep/search calls BEFORE the first edit. If you find yourself reading more than that, stop and edit with what you have; refine later if needed.
-3. Finish fast: edit -> (verify only if risky) -> reply. A typical task should take 1-3 tool calls total.
-4. When you are done, STOP. Reply concisely. Do not summarize what you did step by step — the user saw the tools run.
-5. Never re-read a file you just wrote or edited. The edit result confirms success.
+HOW YOU WORK — elite speed, elite precision:
+1. The prompt already carries relevant code slices (prefetched). If the code you need is there, DO NOT read it again — edit immediately.
+2. Exploration budget: at most 2-3 read/grep/search calls BEFORE the first edit. More than that = wasted time. Stop and edit.
+3. Finish fast: edit → (verify only if risky) → reply concisely. A typical task: 1-3 tool calls total.
+4. When done, STOP. Do NOT summarize what you did step-by-step — the user watched the tools run live.
+5. Never re-read a file you just wrote or edited. The write result IS the confirmation.
+6. If a command fails, read the error carefully, fix the root cause, re-run once. Do not retry blindly.
+7. For large parallel tasks (>3 files, cross-cutting feature), spawn sub-agents. For quick edits, do it yourself.
 
-DO NOT STOP UNTIL THE USER'S REQUEST IS DONE — but "done" means the edit is made and (if risky) verified, not "explored thoroughly".
+DO NOT STOP UNTIL THE USER'S REQUEST IS DONE — but "done" means the edit is made and verified (if risky), not "explored thoroughly".
 
-Code style: minimal surgical diffs, match existing conventions, no comments unless asked, no TODOs/placeholders.`}
+Code style: minimal surgical diffs, match the existing codebase conventions exactly, no comments unless asked, no TODOs/placeholders, no dummy data.`}
 
 // ---------------- plan parsing ----------------
 

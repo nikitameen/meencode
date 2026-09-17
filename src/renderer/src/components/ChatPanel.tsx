@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { Icon, AGENT_COLORS, AGENT_LABELS, TOOL_LABELS, isMCPTool } from './ui'
 import { SessionHistoryPanel } from './SessionHistoryPanel'
@@ -80,7 +80,7 @@ export function ChatPanel() {
   }
 
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight })
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
   }, [feed])
 
   useEffect(() => {
@@ -299,25 +299,42 @@ function makeSession(): import('../store').ChatSession {
 
 function Welcome() {
   const send = useStore((s) => s.send)
+  const settings = useStore((s) => s.settings)
   const suggestions = [
     ['Explain this codebase', 'Research this codebase and give me a concise overview: structure, main components, and how they connect.'],
-    ['Plan a feature', 'I want to add a new feature. First explore the codebase, then propose an implementation plan.'],
-    ['Find potential bugs', 'Investigate this codebase for likely bugs or fragile code and report concrete findings with file:line references.'],
-    ['Write tests', 'Explore the codebase and write a focused test suite for the most important logic.']
+    ['Plan a feature', 'I want to add a new feature. First explore the codebase, then propose an implementation plan with steps.'],
+    ['Find bugs', 'Investigate this codebase for likely bugs or fragile code and report concrete findings with file:line references.'],
+    ['Write tests', 'Explore the codebase and write a focused test suite for the most important logic.'],
+    ['Review last commit', 'Read the git log and review the most recent commit for correctness, regressions, and style.'],
+    ['Refactor complexity', 'Find the most complex or hard-to-maintain file and propose a focused refactor plan.'],
   ]
   return (
     <div className="welcome">
-      <div className="welcome-logo"><Icon name="sparkle" size={22} /></div>
+      <div className="welcome-logo-wrap">
+        <div className="welcome-logo"><Icon name="sparkle" size={26} /></div>
+      </div>
       <div className="welcome-title">Hi, I'm Meencode</div>
       <div className="welcome-sub">
-        An autonomous coding agent. I plan, code, review and debug — with sub-agents, in your workspace.
+        An autonomous coding agent — I plan, code, review and debug with sub-agents, right in your workspace.
       </div>
+      {settings?.workspace && (
+        <div className="welcome-ws">
+          <Icon name="folder" size={11} />
+          <span>{settings.workspace.split(/[/\\]/).pop()}</span>
+        </div>
+      )}
       <div className="welcome-chips">
         {suggestions.map(([label, prompt]) => (
           <button key={label} className="chip" onClick={() => void send(prompt, false)}>
             {label}
           </button>
         ))}
+      </div>
+      <div className="welcome-kbd-hints">
+        <span><kbd>⌃K</kbd> inline edit</span>
+        <span><kbd>@file</kbd> attach context</span>
+        <span><kbd>@codebase</kbd> search</span>
+        <span><kbd>⌃⇧P</kbd> commands</span>
       </div>
     </div>
   )
@@ -327,19 +344,19 @@ function FeedItemView({ item }: { item: import('../store').FeedItem }) {
   switch (item.kind) {
     case 'user':
       return (
-        <div className="msg user">
+        <div className="msg user msg-enter">
           <div className="msg-bubble user-bubble">{item.text}</div>
         </div>
       )
     case 'assistant':
       return (
-        <div className="msg assistant">
+        <div className="msg assistant msg-enter">
           {item.thinking && <Thinking text={item.thinking} />}
           <div className="msg-bubble assistant-bubble">
-            <Markdownish text={item.text} />
+            <MarkdownRenderer text={item.text} />
             {item.streaming && <span className="caret" />}
           </div>
-
+          {!item.streaming && item.text && <FeedbackBar item={item} />}
         </div>
       )
     case 'tool':
@@ -353,15 +370,96 @@ function FeedItemView({ item }: { item: import('../store').FeedItem }) {
     case 'approval':
       return <ApprovalCard {...item} />
     case 'error':
-      return (
-        <div className="error-card">
-          <Icon name="alert" size={13} />
-          <span>{item.text}</span>
-        </div>
-      )
+      return <ErrorCard text={item.text} />
     default:
       return null
   }
+}
+
+function FeedbackBar({ item }: { item: import('../store').FeedItem & { kind: 'assistant' } }) {
+  const feedback = useStore((s) => s.feedback)
+  const [sent, setSent] = useState<'positive' | 'negative' | null>(item.feedback ?? null)
+  const [showComment, setShowComment] = useState(false)
+  const [comment, setComment] = useState('')
+
+  const sendFeedback = async (kind: 'positive' | 'negative') => {
+    if (sent) return
+    setSent(kind)
+    await feedback(item.id, item.runId ?? '', kind, comment || undefined)
+    setShowComment(false)
+  }
+
+  if (sent) {
+    return (
+      <div className="feedback-bar">
+        <span className={`feedback-sent ${sent}`}>
+          <Icon name={sent === 'positive' ? 'thumbUp' : 'thumbDown'} size={11} />
+          {sent === 'positive' ? 'Thanks!' : 'Noted'}
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="feedback-bar">
+      <button className="feedback-btn up" title="Good response" onClick={() => void sendFeedback('positive')}>
+        <Icon name="thumbUp" size={11} />
+      </button>
+      <button className="feedback-btn down" title="Bad response" onClick={() => setShowComment(!showComment)}>
+        <Icon name="thumbDown" size={11} />
+      </button>
+      {showComment && (
+        <div className="feedback-comment-row">
+          <input
+            autoFocus
+            className="feedback-comment-input"
+            placeholder="What was wrong? (optional)"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void sendFeedback('negative')
+              if (e.key === 'Escape') setShowComment(false)
+            }}
+          />
+          <button className="btn" onClick={() => void sendFeedback('negative')}>Send</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ErrorCard({ text }: { text: string }) {
+  const send = useStore((s) => s.send)
+  const sessions = useStore((s) => s.sessions)
+  const activeSessionId = useStore((s) => s.activeSessionId)
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? sessions[0]
+
+  // Find the last user message to offer retry
+  const lastUserMsg = [...(activeSession?.feed ?? [])].reverse().find((f) => f.kind === 'user')
+  const isNetworkErr = /connection|network|timeout|ECONNRESET|stream/i.test(text)
+
+  return (
+    <div className="error-card-wrap">
+      <div className="error-card">
+        <Icon name="alert" size={13} />
+        <span className="error-card-text">{text}</span>
+      </div>
+      <div className="error-actions">
+        {lastUserMsg && lastUserMsg.kind === 'user' && (
+          <button
+            className="btn retry-btn"
+            title="Retry the last request"
+            onClick={() => void send(lastUserMsg.text, false)}
+          >
+            <Icon name="refresh" size={11} /> Fix this
+          </button>
+        )}
+        {isNetworkErr && (
+          <span className="error-hint">Network error — check your connection and API key</span>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function Thinking({ text }: { text: string }) {
@@ -377,33 +475,231 @@ function Thinking({ text }: { text: string }) {
   )
 }
 
-function Markdownish({ text }: { text: string }) {
-  const parts: React.ReactNode[] = []
+// ─── Full Markdown Renderer ──────────────────────────────────────────────────
+
+function MarkdownRenderer({ text }: { text: string }) {
+  const nodes = parseMarkdown(text)
+  return <div className="msg-md">{nodes.map((n, i) => renderNode(n, i))}</div>
+}
+
+type MdNode =
+  | { type: 'paragraph'; inlines: MdInline[] }
+  | { type: 'heading'; level: 1 | 2 | 3; inlines: MdInline[] }
+  | { type: 'code'; lang: string; content: string }
+  | { type: 'blockquote'; inlines: MdInline[] }
+  | { type: 'ul'; items: MdInline[][] }
+  | { type: 'ol'; items: MdInline[][] }
+  | { type: 'hr' }
+  | { type: 'table'; head: string[]; rows: string[][] }
+
+type MdInline =
+  | { type: 'text'; value: string }
+  | { type: 'bold'; value: string }
+  | { type: 'italic'; value: string }
+  | { type: 'code'; value: string }
+  | { type: 'link'; href: string; label: string }
+
+function parseMarkdown(text: string): MdNode[] {
   const lines = text.split('\n')
-  let inCode = false
-  let codeLines: string[] = []
-  let key = 0
-  const flush = () => {
-    if (codeLines.length > 0) {
-      parts.push(<pre key={key++} className="msg-code">{codeLines.join('\n')}</pre>)
-      codeLines = []
-    }
-  }
-  for (const line of lines) {
-    if (line.trim().startsWith('```')) {
-      if (inCode) flush()
-      inCode = !inCode
+  const nodes: MdNode[] = []
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i]
+
+    // fenced code block
+    const fenceMatch = line.match(/^```(\w*)/)
+    if (fenceMatch) {
+      const lang = fenceMatch[1] || ''
+      const codeLines: string[] = []
+      i++
+      while (i < lines.length && !lines[i].startsWith('```')) {
+        codeLines.push(lines[i])
+        i++
+      }
+      i++ // consume closing ```
+      nodes.push({ type: 'code', lang, content: codeLines.join('\n') })
       continue
     }
-    if (inCode) codeLines.push(line)
-    else {
-      if (line.trim() === '') continue
-      const bolded = line.split(/\*\*(.+?)\*\*/g).map((seg, i) => (i % 2 === 1 ? <strong key={i}>{seg}</strong> : seg))
-      parts.push(<p key={key++}>{bolded}</p>)
+
+    // heading
+    const hMatch = line.match(/^(#{1,3})\s+(.+)/)
+    if (hMatch) {
+      nodes.push({ type: 'heading', level: hMatch[1].length as 1 | 2 | 3, inlines: parseInlines(hMatch[2]) })
+      i++; continue
+    }
+
+    // hr
+    if (/^[-*_]{3,}$/.test(line.trim())) {
+      nodes.push({ type: 'hr' })
+      i++; continue
+    }
+
+    // blockquote
+    if (line.startsWith('> ')) {
+      nodes.push({ type: 'blockquote', inlines: parseInlines(line.slice(2)) })
+      i++; continue
+    }
+
+    // table (simple: | col | col |)
+    if (/^\|.+\|/.test(line)) {
+      const headerCells = line.split('|').slice(1, -1).map((c) => c.trim())
+      let j = i + 1
+      // skip separator row
+      if (j < lines.length && /^\|[-| :]+\|$/.test(lines[j])) j++
+      const rows: string[][] = []
+      while (j < lines.length && /^\|.+\|/.test(lines[j])) {
+        rows.push(lines[j].split('|').slice(1, -1).map((c) => c.trim()))
+        j++
+      }
+      nodes.push({ type: 'table', head: headerCells, rows })
+      i = j; continue
+    }
+
+    // unordered list
+    if (/^[-*+] /.test(line)) {
+      const items: MdInline[][] = []
+      while (i < lines.length && /^[-*+] /.test(lines[i])) {
+        items.push(parseInlines(lines[i].slice(2)))
+        i++
+      }
+      nodes.push({ type: 'ul', items })
+      continue
+    }
+
+    // ordered list
+    if (/^\d+\. /.test(line)) {
+      const items: MdInline[][] = []
+      while (i < lines.length && /^\d+\. /.test(lines[i])) {
+        items.push(parseInlines(lines[i].replace(/^\d+\. /, '')))
+        i++
+      }
+      nodes.push({ type: 'ol', items })
+      continue
+    }
+
+    // blank line — skip
+    if (line.trim() === '') { i++; continue }
+
+    // paragraph
+    const paraLines: string[] = []
+    while (i < lines.length && lines[i].trim() !== '' && !lines[i].startsWith('#') && !lines[i].startsWith('```') && !/^[-*+] /.test(lines[i]) && !/^\d+\. /.test(lines[i]) && !lines[i].startsWith('> ') && !/^\|.+\|/.test(lines[i])) {
+      paraLines.push(lines[i])
+      i++
+    }
+    if (paraLines.length > 0) {
+      nodes.push({ type: 'paragraph', inlines: parseInlines(paraLines.join('\n')) })
     }
   }
-  flush()
-  return <div className="msg-md">{parts}</div>
+  return nodes
+}
+
+function parseInlines(text: string): MdInline[] {
+  const out: MdInline[] = []
+  // handle bold, italic, inline code, links
+  const re = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|__[^_]+__|_[^_]+_|\[([^\]]+)\]\(([^)]+)\))/g
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push({ type: 'text', value: text.slice(last, m.index) })
+    const tok = m[0]
+    if (tok.startsWith('`')) {
+      out.push({ type: 'code', value: tok.slice(1, -1) })
+    } else if (tok.startsWith('**') || tok.startsWith('__')) {
+      out.push({ type: 'bold', value: tok.slice(2, -2) })
+    } else if (tok.startsWith('*') || tok.startsWith('_')) {
+      out.push({ type: 'italic', value: tok.slice(1, -1) })
+    } else if (m[2] && m[3]) {
+      out.push({ type: 'link', href: m[3], label: m[2] })
+    }
+    last = re.lastIndex
+  }
+  if (last < text.length) out.push({ type: 'text', value: text.slice(last) })
+  return out
+}
+
+function renderInlines(inlines: MdInline[], key?: number): React.ReactNode {
+  return inlines.map((il, i) => {
+    const k = `${key ?? 0}-${i}`
+    switch (il.type) {
+      case 'text': return <span key={k}>{il.value}</span>
+      case 'bold': return <strong key={k}>{il.value}</strong>
+      case 'italic': return <em key={k}>{il.value}</em>
+      case 'code': return <code key={k} className="md-inline-code">{il.value}</code>
+      case 'link': return <a key={k} href={il.href} target="_blank" rel="noreferrer">{il.label}</a>
+    }
+  })
+}
+
+function renderNode(node: MdNode, key: number): React.ReactNode {
+  switch (node.type) {
+    case 'heading': {
+      const content = renderInlines(node.inlines, key)
+      if (node.level === 1) return <h1 key={key} className="md-h1">{content}</h1>
+      if (node.level === 2) return <h2 key={key} className="md-h2">{content}</h2>
+      return <h3 key={key} className="md-h3">{content}</h3>
+    }
+    case 'paragraph':
+      return <p key={key} className="md-p">{renderInlines(node.inlines, key)}</p>
+    case 'code':
+      return <CodeBlock key={key} lang={node.lang} content={node.content} />
+    case 'blockquote':
+      return <blockquote key={key} className="md-blockquote">{renderInlines(node.inlines, key)}</blockquote>
+    case 'ul':
+      return (
+        <ul key={key} className="md-ul">
+          {node.items.map((item, i) => <li key={i} className="md-li">{renderInlines(item, i)}</li>)}
+        </ul>
+      )
+    case 'ol':
+      return (
+        <ol key={key} className="md-ol">
+          {node.items.map((item, i) => <li key={i} className="md-li">{renderInlines(item, i)}</li>)}
+        </ol>
+      )
+    case 'hr':
+      return <hr key={key} className="md-hr" />
+    case 'table':
+      return (
+        <div key={key} className="md-table-wrap">
+          <table className="md-table">
+            <thead>
+              <tr>{node.head.map((h, i) => <th key={i}>{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {node.rows.map((row, ri) => (
+                <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{cell}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )
+  }
+}
+
+function CodeBlock({ lang, content }: { lang: string; content: string }) {
+  const [copied, setCopied] = useState(false)
+  const lines = content.split('\n').length
+
+  const copy = () => {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1800)
+    })
+  }
+
+  return (
+    <div className={`msg-code-wrap lang-block-${lang || 'plain'}`}>
+      <div className="msg-code-header">
+        {lang && <span className="msg-code-lang">{lang}</span>}
+        <span className="msg-code-lines">{lines} line{lines !== 1 ? 's' : ''}</span>
+        <button className="code-copy-btn" onClick={copy} title="Copy code">
+          {copied ? <><Icon name="check" size={11} /> Copied</> : <><Icon name="attach" size={11} /> Copy</>}
+        </button>
+      </div>
+      <pre className="msg-code"><code>{content}</code></pre>
+    </div>
+  )
 }
 
 function ToolItem(props: { id: string; kind: 'tool'; agent: string; name: string; argsSummary: string; status: string; result?: string; ms?: number }) {
@@ -413,7 +709,7 @@ function ToolItem(props: { id: string; kind: 'tool'; agent: string; name: string
   const verb = TOOL_LABELS[props.name] ?? (isMcp ? props.name.split('.')[1] : props.name)
   const iconName: import('./ui').IconName = isMcp ? 'mcp' : 'tool'
   return (
-    <div className={`tool-item ${isMcp ? 'mcp' : ''}`} style={{ borderLeftColor: color }}>
+    <div className={`tool-item ${isMcp ? 'mcp' : ''} tool-enter`} style={{ borderLeftColor: color }}>
       <button className="tool-row" onClick={() => setOpen(!open)}>
         {props.status === 'running' ? (
           <span className="tool-spinner"><Icon name="spinner" size={11} /></span>
@@ -427,6 +723,7 @@ function ToolItem(props: { id: string; kind: 'tool'; agent: string; name: string
         <span className="tool-verb">{verb}</span>
         <span className="tool-args" title={props.result}>{props.argsSummary}</span>
         {props.ms !== undefined && <span className="tool-ms">{props.ms}ms</span>}
+        {props.result && <span className="tool-expand-hint">{open ? '▲' : '▼'}</span>}
       </button>
       {open && props.result && <pre className="tool-result">{props.result}</pre>}
     </div>
@@ -437,7 +734,7 @@ function SubagentItem(props: { id: string; kind: 'subagent'; agent: string; task
   const color = AGENT_COLORS[props.agent] ?? 'var(--dim)'
   if (props.state === 'start') {
     return (
-      <div className="subagent-item start" style={{ borderColor: color }}>
+      <div className="subagent-item start tool-enter" style={{ borderColor: color }}>
         <span className="tool-spinner"><Icon name="spinner" size={11} /></span>
         <span className="subagent-name" style={{ color }}>{AGENT_LABELS[props.agent] ?? props.agent}</span>
         <span className="subagent-task">{props.task}</span>
@@ -445,7 +742,7 @@ function SubagentItem(props: { id: string; kind: 'subagent'; agent: string; task
     )
   }
   return (
-    <div className="subagent-item end" style={{ borderColor: color }}>
+    <div className="subagent-item end tool-enter" style={{ borderColor: color }}>
       <span className="tool-check"><Icon name="check" size={11} /></span>
       <span className="subagent-name" style={{ color }}>{AGENT_LABELS[props.agent] ?? props.agent}</span>
       <span className="subagent-summary">{props.summary}</span>
