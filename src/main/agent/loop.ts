@@ -17,8 +17,9 @@ export interface LoopDeps {
   maxIterations: number
   signal: AbortSignal
   shouldStop?(): boolean
-  /** return true when the agent's final text is a real completion; false / undefined forces another turn */
-  isComplete?(finalText: string, toolCallsMade: number): boolean
+  /** return true when the agent's final text is a real completion; false forces another turn.
+   *  May set nudge.text to control the forced follow-up message. */
+  isComplete?(finalText: string, toolCallsMade: number, nudge: { text: string }): boolean
 }
 
 export interface LoopResult {
@@ -31,7 +32,17 @@ export interface LoopResult {
   error?: string
 }
 
-const HISTORY_TOOL_CAP = 2500
+const READ_HISTORY_CAP = 16000   // read_file results must stay usable for edit_file's old_string
+const SEARCH_HISTORY_CAP = 2500  // grep/search hits are pointers, not content
+const GENERIC_HISTORY_CAP = 4000
+
+/** Per-tool history budget: a truncated read makes edit_file fail with
+ *  "old_string not found", so reads keep far more context than searches. */
+function historyCapFor(toolName: string): number {
+  if (toolName === 'read_file') return READ_HISTORY_CAP
+  if (toolName === 'grep' || toolName === 'search_files' || toolName === 'search_codebase' || toolName === 'list_dir') return SEARCH_HISTORY_CAP
+  return GENERIC_HISTORY_CAP
+}
 
 function fuzzyToolName(name: string, tools: ToolDef[]): string | null {
   const n = name.trim().toLowerCase()
@@ -73,10 +84,12 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
   let toolCallsMade = 0
 
   const shouldStop = deps.shouldStop ?? (() => false)
-  // Hard cap from settings (default 25). The model decides when it is done by
+  // Hard cap from settings (default 16). The model decides when it is done by
   // simply not calling tools anymore — like Cursor. No narration heuristics,
-  // no "continue" nudges: those caused endless reading loops.
-  const maxLoops = Math.max(1, deps.maxIterations || 25)
+  // no "continue" nudges: those caused endless reading loops. isComplete may
+  // still force exactly ONE targeted retry (code-in-prose guard).
+  const maxLoops = Math.max(1, deps.maxIterations || 16)
+  let nudgeUsed = false
   try {
     for (let loop = 0; loop < maxLoops; loop++) {
       if (shouldStop() || deps.signal.aborted) {
@@ -152,7 +165,7 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
           result: truncate(result, 4000),
           ms: Date.now() - ts
         })
-        return { role: 'tool' as const, tool_call_id: call.id, name: call.name, content: truncate(result, HISTORY_TOOL_CAP) }
+        return { role: 'tool' as const, tool_call_id: call.id, name: call.name, content: truncate(result, historyCapFor(call.name)) }
       }
 
       if (canParallel && res.toolCalls.length > 1) {
@@ -173,9 +186,14 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
 
     final = res.content ?? ''
     if (final) messages.push({ role: 'assistant', content: final })
-    // The model chose not to call any tools: the turn is final. No narration
-    // heuristics and no "continue" nudges — those made runs spiral forever.
-    break
+    // The model chose not to call any tools: normally final. isComplete may
+    // force exactly ONE retry with a specific nudge (e.g. "apply your code").
+    const nudge: { text: string } = { text: '' }
+    const complete = deps.isComplete?.(final, toolCallsMade, nudge) ?? true
+    if (complete || nudgeUsed) break
+    nudgeUsed = true
+    messages.push({ role: 'user', content: nudge.text || 'Apply the change now using your file tools. Do not answer with code in chat.' })
+    continue
     }
   } catch (e: any) {
     // ABORT or mid-run error: return everything learned so far instead of losing it.
@@ -257,9 +275,11 @@ function sizeOf(m: AgentMessage): number {
     (('tool_calls' in m && m.tool_calls) ? JSON.stringify(m.tool_calls).length : 0)
 }
 
-const READ_TOOLS = new Set(['list_dir', 'read_file', 'search_files', 'grep', 'search_codebase'])
+const READ_TOOLS = new Set(['list_dir', 'search_files', 'grep', 'search_codebase'])
+// NOTE: read_file results are never truncated here — edit_file needs the full
+// text to build exact old_string matches. Only pointer-style results shrink.
 
-/** Drop bulky read-only tool results from the middle of the history, keeping the most recent ones and all assistant/tool-call messages. */
+/** Shrink bulky search/list results from the middle of the history, keeping the most recent ones and all assistant/tool-call messages. */
 function dropStaleReads(messages: AgentMessage[]): void {
   if (messages.length <= 10) return
   let removed = 0
@@ -268,7 +288,7 @@ function dropStaleReads(messages: AgentMessage[]): void {
     const m = messages[i]
     if (m.role === 'tool' && READ_TOOLS.has(m.name ?? '')) {
       if (m.content.length > 2500) {
-        m.content = m.content.slice(0, 1800) + '\n[...older read result truncated to save context]'
+        m.content = m.content.slice(0, 1800) + '\n[...older search result truncated to save context]'
         removed++
       }
     }

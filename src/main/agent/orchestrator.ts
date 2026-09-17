@@ -59,6 +59,8 @@ export class AgentSession {
     this.root = this.roots[0] ?? null
     this.history = []
     this.plan = []
+    this.forcedApplyRetry = false
+    this.lastUserText = null
       if (this.root) {
       this.toolkit = new Toolkit(this.roots, {
         onFileChange: (c) => this.emit({ type: 'file_change', change: c }),
@@ -93,6 +95,8 @@ export class AgentSession {
 
   async send(text: string, attachedFile?: string | null, images?: { name: string; dataUrl: string }[], ide?: IDEContext | null): Promise<void> {
     const settings = this.io.getSettings()
+    this.lastUserText = text
+    this.forcedApplyRetry = false
     if (!this.root) {
       this.emit({ type: 'run_start', runId: 'x' })
       this.emit({ type: 'run_end', runId: 'x', error: 'Open a workspace folder first.' })
@@ -159,7 +163,7 @@ export class AgentSession {
           maxIterations: settings.maxIterations,
           signal: controller.signal,
           shouldStop: () => this.stopRequested,
-          isComplete: (finalText, toolCallsMade) => this.isRunComplete(finalText, toolCallsMade)
+          isComplete: (finalText, toolCallsMade, nudge) => this.isRunComplete(finalText, toolCallsMade, nudge)
         },
         this.buildSystemPrompt(),
         this.history
@@ -375,15 +379,22 @@ Do not include greetings or explanations outside the bullet points.`
     return `${base}\n\n${learned}`
   }
 
-  private isRunComplete(finalText: string, toolCallsMade: number): boolean {
-    // Cursor-style: the model is done when it stops calling tools. The only
-    // exception: it produced a final text with zero tool calls the whole run
-    // AND it is clearly mid-plan — rare, and the user can always send a
-    // follow-up. Never override the model's decision to stop.
-    void finalText
-    void toolCallsMade
+  /** once per run: the model answered with code-in-prose instead of applying it */
+  private forcedApplyRetry = false
+
+  private isRunComplete(finalText: string, toolCallsMade: number, nudge: { text: string }): boolean {
+    // Cursor-style termination: the model stops calling tools -> done.
+    // One exception: the model wrote code in its ANSWER (fenced block) but
+    // never actually edited any file. That is prose-instead-of-code — force
+    // ONE retry demanding the edit be applied with the tools.
+    if (!this.forcedApplyRetry && toolCallsMade === 0 && /```/.test(finalText) && /\b(create|add|write|implement|make|fix|update|change|refactor|move|rename|delete)\b/i.test(this.lastUserText ?? '')) {
+      this.forcedApplyRetry = true
+      nudge.text = 'You answered with code in chat instead of editing the files. Apply the change NOW using write_file/edit_file. Do not repeat the code in your reply — just make the edit and confirm briefly.'
+      return false
+    }
     return true
   }
+  private lastUserText: string | null = null
 
   reset() {
     this.history = []
