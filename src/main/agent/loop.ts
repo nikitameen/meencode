@@ -240,10 +240,10 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
     // The model chose not to call any tools: normally final. isComplete may
     // force exactly ONE retry with a specific nudge (e.g. "apply your code").
     const nudge: { text: string } = { text: '' }
-    const complete = deps.isComplete?.(final, toolCallsMade, nudge) ?? true
-    if (complete || nudgeUsed) break
+    const isFinished = deps.isComplete?.(final, toolCallsMade, nudge) ?? true
+    if (isFinished) break
     nudgeUsed = true
-    messages.push({ role: 'user', content: nudge.text || 'Apply the change now using your file tools. Do not answer with code in chat.' })
+    messages.push({ role: 'user', content: nudge.text || 'Apply the change now using your file tools. Do not stop until all edits are applied and verified.' })
     continue
     }
   } catch (e: any) {

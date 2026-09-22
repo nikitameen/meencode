@@ -59,6 +59,7 @@ function migrate(raw: Record<string, unknown>): Settings {
     roots = [path.resolve(legacy)]
   }
   s.roots = roots
+  if (!s.maxIterations || s.maxIterations < 30) s.maxIterations = 50
   // keep workspace as the first root for backward compat reads
   s.workspace = roots[0] ?? null
   return s
