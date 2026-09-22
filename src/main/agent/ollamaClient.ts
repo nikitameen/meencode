@@ -8,6 +8,16 @@ export interface StreamCallbacks {
   onThinking?: (t: string) => void
 }
 
+/** Error thrown when the stream produces no bytes for too long (dead connection). */
+export class StreamStallError extends Error {
+  constructor(public idleMs: number) {
+    super(`Model stream stalled: no data for ${idleMs}ms`)
+    this.name = 'StreamStallError'
+  }
+}
+
+const STREAM_IDLE_TIMEOUT_MS = 90_000
+
 export class OllamaCloudClient {
   private url: string
   private headers: Record<string, string>
@@ -37,13 +47,24 @@ export class OllamaCloudClient {
       ...(tools.length > 0 ? { tools: tools.map((t) => ({ type: 'function', function: t })) } : {})
     }
 
-    const res = await proxySafeFetch(this.url, {
-      method: 'POST',
-      headers: { Authorization: this.headers.Authorization, 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal,
-      redirect: 'follow'
-    })
+    // Layered abort: the caller's signal (user Stop) OR our inactivity watchdog.
+    const internal = new AbortController()
+    const forward = () => internal.abort()
+    if (signal.aborted) internal.abort()
+    signal.addEventListener('abort', forward, { once: true })
+
+    let res: Response
+    try {
+      res = await proxySafeFetch(this.url, {
+        method: 'POST',
+        headers: { Authorization: this.headers.Authorization, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: internal.signal,
+        redirect: 'follow'
+      })
+    } finally {
+      signal.removeEventListener('abort', forward)
+    }
 
     if (res.redirected && res.url && !res.url.includes('/v1/chat/completions')) {
       throw new Error(`The API base URL redirected to ${res.url}. Open Settings and set the Base URL to https://ollama.com`)
@@ -57,28 +78,63 @@ export class OllamaCloudClient {
     if (res.status === 404) {
       throw new Error(`Model "${model}" was not found on provider endpoint. Pick another model in Settings.`)
     }
+    if (res.status === 429) {
+      throw new Error('Rate limited (429) by the provider. Wait a moment and send the message again.')
+    }
     if (!res.ok) {
       const t = await res.text().catch(() => '')
       throw new Error(`API provider error ${res.status}: ${t.slice(0, 300)}`)
     }
 
-    return parseSSE(res.body!, cb)
+    try {
+      return await parseSSE(res.body!, cb, { signal, internal })
+    } finally {
+      // never leave the watchdog running after the call resolves
+      if (res.body && typeof (res.body as any).cancel === 'function') {
+        try { (res.body as any).cancel().catch?.(() => {}) } catch { /* ignore */ }
+      }
+    }
   }
 }
 
 // ---------------- SSE parsing ----------------
 
-export async function parseSSE(body: ReadableStream, cb: StreamCallbacks): Promise<ChatResult> {
+interface ParseSSEOpts {
+  /** caller's abort signal (user Stop) */
+  signal?: AbortSignal
+  /** internal controller for watchdog aborts */
+  internal?: AbortController
+}
+
+/**
+ * Stream parser. Content flows through RAW — no think-tag splitting, no
+ * holdback, nothing swallowed. Think hygiene happens once at finalize().
+ * reasoning_content (server-side reasoning channel) still routes to
+ * onThinking, which never affects content.
+ */
+export async function parseSSE(body: ReadableStream, cb: StreamCallbacks, opts: ParseSSEOpts = {}): Promise<ChatResult> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
   let content = ''
   const toolAcc = new Map<number, { id: string; name: string; args: string }>()
-  const think = makeThinkSplitter(cb, (cleanText) => {
-    content += cleanText
-  })
+  let lastActivity = Date.now()
+
+  // watchdog: abort the fetch if the stream goes silent
+  let watchdog: ReturnType<typeof setTimeout> | null = null
+  const idleMs = STREAM_IDLE_TIMEOUT_MS
+  const arm = () => {
+    if (watchdog) clearTimeout(watchdog)
+    watchdog = setTimeout(() => opts.internal?.abort(new StreamStallError(idleMs)), idleMs)
+  }
+  const disarm = () => {
+    if (watchdog) clearTimeout(watchdog)
+    watchdog = null
+  }
+  arm()
 
   const handleLine = (line: string) => {
+    lastActivity = Date.now()
     const s = line.trim()
     if (!s.startsWith('data:')) return
     const data = s.slice(5).trim()
@@ -96,7 +152,8 @@ export async function parseSSE(body: ReadableStream, cb: StreamCallbacks): Promi
       cb.onThinking?.(reasoning)
     }
     if (typeof delta.content === 'string' && delta.content) {
-      think.push(delta.content)
+      content += delta.content
+      cb.onToken?.(delta.content)
     }
     if (Array.isArray(delta.tool_calls)) {
       for (const tc of delta.tool_calls) {
@@ -110,16 +167,29 @@ export async function parseSSE(body: ReadableStream, cb: StreamCallbacks): Promi
     }
   }
 
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buf += decoder.decode(value, { stream: true })
-    const lines = buf.split('\n')
-    buf = lines.pop() ?? ''
-    for (const line of lines) handleLine(line)
+  try {
+    for (;;) {
+      if (opts.signal?.aborted) throw new Error('aborted')
+      const { done, value } = await reader.read()
+      if (done) break
+      arm()
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) handleLine(line)
+    }
+    if (buf) handleLine(buf)
+  } catch (e: any) {
+    // A watchdog abort surfaces as a stall if the user did not stop the run.
+    if (opts.signal?.aborted) throw new Error('aborted')
+    if (e?.name === 'AbortError' && opts.internal?.signal?.aborted && !opts.signal?.aborted) {
+      throw new StreamStallError(Date.now() - lastActivity)
+    }
+    throw e
+  } finally {
+    disarm()
+    try { reader.releaseLock() } catch { /* ignore */ }
   }
-  if (buf) handleLine(buf)
-  think.flush()
 
   // standard tool calls
   const toolCalls: ToolCall[] = []
@@ -135,74 +205,40 @@ export async function parseSSE(body: ReadableStream, cb: StreamCallbacks): Promi
 
   // native fallback: models that emit tool calls as text blocks
   const nativeResult = extractNativeToolCalls(content)
-  let clean = nativeResult.content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
   for (const c of nativeResult.calls) toolCalls.push(c)
 
+  // finalize: strip think hygiene from the final text only (raw streaming
+  // already delivered every token; this keeps stored/replied content clean).
+  const clean = stripThinkBlocks(nativeResult.content).trim()
   return { content: clean, toolCalls }
 }
 
-// ---------------- <think> tag extraction ----------------
+// ---------------- think hygiene (finalize only) ----------------
 
-function makeThinkSplitter(cb: StreamCallbacks, onCleanText: (s: string) => void) {
-  let inThink = false
-  let pending = ''
-  const emitText = (s: string) => {
-    if (!s) return
-    onCleanText(s)
-    cb.onToken?.(s)
-  }
-  const emitThink = (s: string) => s && cb.onThinking?.(s)
+// Tags are built from char codes so the literals never appear in this file.
+const T_OPEN = '<' + String.fromCharCode(116, 104, 105, 110, 107) + '>'
+const T_CLOSE = '</' + String.fromCharCode(116, 104, 105, 110, 107) + '>'
 
-  return {
-    push(chunk: string) {
-      pending += chunk
-      for (;;) {
-        if (!inThink) {
-          const i = pending.indexOf('<think>')
-          if (i === -1) {
-            const hold = Math.max(0, pending.length - 7)
-            if (hold > 0) {
-              emitText(pending.slice(0, hold))
-              pending = pending.slice(hold)
-            }
-            break
-          } else {
-            emitText(pending.slice(0, i))
-            pending = pending.slice(i + 7)
-            inThink = true
-          }
-        } else {
-          const j = pending.indexOf('</think>')
-          if (j === -1) {
-            const hold = Math.max(0, pending.length - 8)
-            if (hold > 0) {
-              emitThink(pending.slice(0, hold))
-              pending = pending.slice(hold)
-            }
-            break
-          } else {
-            emitThink(pending.slice(0, j))
-            pending = pending.slice(j + 8)
-            inThink = false
-          }
-        }
-      }
-    },
-    flush() {
-      if (!pending) return
-      if (inThink) emitThink(pending)
-      else emitText(pending)
-      pending = ''
-    }
-  }
+/** Remove think blocks from final text. Balanced blocks go entirely;
+ *  an unclosed leading block loses everything up to end-of-text (the
+ *  answer never arrived — keeping the partial reasoning would leak it). */
+export function stripThinkBlocks(text: string): string {
+  let out = text
+  const re = new RegExp(`${T_OPEN}[\\s\\S]*?${T_CLOSE}`, 'g')
+  out = out.replace(re, '')
+  const i = out.indexOf(T_OPEN)
+  if (i !== -1) out = out.slice(0, i)
+  return out
 }
 
 // ---------------- native tool-call fallback ----------------
 
+const TOOL_OPEN = '<' + String.fromCharCode(116, 111, 111, 108, 95, 99, 97, 108, 108) + '>'
+const TOOL_CLOSE = '</' + String.fromCharCode(116, 111, 111, 108, 95, 99, 97, 108, 108) + '>'
+
 export function extractNativeToolCalls(content: string): { content: string; calls: ToolCall[] } {
   const calls: ToolCall[] = []
-  const re = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
-  let m: RegExpExecArray | null
+  const re = new RegExp(`${TOOL_OPEN}\\s*([\\s\\S]*?)\\s*${TOOL_CLOSE}`, 'g')
   let i = 0
   const stripped = content.replace(re, (_full, body: string) => {
     i++

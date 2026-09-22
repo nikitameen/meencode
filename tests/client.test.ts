@@ -70,6 +70,45 @@ describe('SSE parsing', () => {
   const THINK_OPEN = '<' + String.fromCharCode(116, 104, 105, 110, 107) + '>'
   const THINK_CLOSE = '</' + String.fromCharCode(116, 104, 105, 110, 107) + '>'
 
+  it('streams think-block content RAW as tokens (no holdback, nothing swallowed)', async () => {
+    const tokens: string[] = []
+    const stream = sseStream([
+      delta({ choices: [{ delta: { content: THINK_OPEN + 'internal ' } }] }),
+      delta({ choices: [{ delta: { content: 'deliberation' + THINK_CLOSE } }] }),
+      delta({ choices: [{ delta: { content: 'The answer' } }] }),
+      'data: [DONE]\n\n'
+    ])
+    const res = await parseSSE(stream, { onToken: (t) => tokens.push(t) })
+    // every chunk streamed through immediately
+    expect(tokens.join('')).toBe(THINK_OPEN + 'internal deliberation' + THINK_CLOSE + 'The answer')
+    // final content has think hygiene applied
+    expect(res.content).toBe('The answer')
+  })
+
+  it('drops an unclosed think block instead of leaking reasoning as the answer', async () => {
+    const stream = sseStream([
+      delta({ choices: [{ delta: { content: THINK_OPEN + 'half-finished ' } }] }),
+      delta({ choices: [{ delta: { content: 'reasoning that never closes' } }] }),
+      'data: [DONE]\n\n'
+    ])
+    const res = await parseSSE(stream, {})
+    expect(res.content).toBe('')
+  })
+
+  it('still extracts native tool_call text blocks', async () => {
+    const TOOL_OPEN = '<' + String.fromCharCode(116, 111, 111, 108, 95, 99, 97, 108, 108) + '>'
+    const TOOL_CLOSE = '</' + String.fromCharCode(116, 111, 111, 108, 95, 99, 97, 108, 108) + '>'
+    const stream = sseStream([
+      delta({ choices: [{ delta: { content: 'editing now ' + TOOL_OPEN + '{"name":"edit_file","arguments":{"path":"a.txt"}}' + TOOL_CLOSE } }] }),
+      'data: [DONE]\n\n'
+    ])
+    const res = await parseSSE(stream, {})
+    expect(res.content).toBe('editing now')
+    expect(res.toolCalls).toHaveLength(1)
+    expect(res.toolCalls[0].name).toBe('edit_file')
+  })
+})
+
 describe('plan parsing', () => {
   it('parses a fenced plan with ids', () => {
     const text = 'Here is the plan:\n```json\n{"steps":[{"title":"Add util","detail":"create src/util.py","files":["src/util.py"]},{"title":"Write tests","detail":"pytest","files":[]}]}\n```'
@@ -186,18 +225,98 @@ describe('agent loop', () => {
     expect(toolMsg?.content).toContain('entire file content here')
   })
 
-  it('preserves partial learnings on a mid-run error', async () => {
+  it('preserves partial learnings on a mid-run error (non-retryable errors surface immediately)', async () => {
     const chat = vi
       .fn()
       .mockResolvedValueOnce({ content: '', toolCalls: [{ id: 'g1', name: 'grep', args: { pattern: 'x' } }] })
-      .mockRejectedValueOnce(new Error('network down'))
+      .mockRejectedValueOnce(new Error('boom: invalid request'))
     const res = await runLoop(
       { chat: chat as any, tools: noopTools, execute: async () => 'match found', emit, agent: 'orchestrator', maxIterations: 5, signal: new AbortController().signal },
       'sys',
       [{ role: 'user', content: 'go' }]
     )
-    expect(res.error).toMatch(/network down/)
+    expect(chat).toHaveBeenCalledTimes(2)
+    expect(res.error).toMatch(/boom: invalid request/)
     expect(res.newMessages.find((m) => m.role === 'tool')?.content).toBe('match found')
+  })
+
+  it('retries an empty turn instead of silently completing (the 15s silent-stop bug)', async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({ content: '', toolCalls: [] })   // model died mid-think
+      .mockResolvedValueOnce({ content: '', toolCalls: [] })   // still empty
+      .mockResolvedValueOnce({ content: 'Recovered!', toolCalls: [] }) // recovers
+    const res = await runLoop(
+      { chat: chat as any, tools: noopTools, execute: async () => 'ok', emit, agent: 'orchestrator', maxIterations: 8, signal: new AbortController().signal },
+      'sys',
+      [{ role: 'user', content: 'go' }]
+    )
+    expect(chat).toHaveBeenCalledTimes(3)
+    expect(res.content).toBe('Recovered!')
+    expect(res.error).toBeUndefined()
+  })
+
+  it('ends with a VISIBLE error after repeated empty responses, not a silent stop', async () => {
+    const chat = vi.fn().mockResolvedValue({ content: '', toolCalls: [] })
+    const res = await runLoop(
+      { chat: chat as any, tools: noopTools, execute: async () => 'ok', emit, agent: 'orchestrator', maxIterations: 8, signal: new AbortController().signal },
+      'sys',
+      [{ role: 'user', content: 'go' }]
+    )
+    expect(res.error).toMatch(/empty responses/i)
+    // only nudges — no junk assistant/tool messages in the session thread
+    expect(res.newMessages.every((m) => m.role === 'user')).toBe(true)
+  })
+
+  it('does NOT stop at the iteration cap — nudges and continues until the task is done', async () => {
+    // model does tool work for more turns than maxIterations, then finishes
+    const seq: any[] = []
+    for (let i = 0; i < 5; i++) seq.push({ content: '', toolCalls: [{ id: `t${i}`, name: 'read_file', args: {} }] })
+    seq.push({ content: 'All done, edits applied.', toolCalls: [] })
+    const mock = vi.fn()
+    seq.forEach((v) => mock.mockResolvedValueOnce(v))
+    const res = await runLoop(
+      { chat: mock as any, tools: noopTools, execute: async () => 'data', emit, agent: 'orchestrator', maxIterations: 3, signal: new AbortController().signal },
+      'sys',
+      [{ role: 'user', content: 'go' }]
+    )
+    // maxIterations=3 but the task needed 6 turns: the loop kept going
+    expect(res.content).toBe('All done, edits applied.')
+    expect(res.toolCallsMade).toBe(5)
+    expect(res.error).toBeUndefined()
+  })
+
+  it('retries a stalled stream (StreamStallError) and keeps the session intact', async () => {
+    const stall = new Error('dead connection')
+    stall.name = 'StreamStallError'
+    const chat = vi
+      .fn()
+      .mockRejectedValueOnce(stall)
+      .mockResolvedValueOnce({ content: 'back online', toolCalls: [] })
+    const res = await runLoop(
+      { chat: chat as any, tools: noopTools, execute: async () => 'ok', emit, agent: 'orchestrator', maxIterations: 5, signal: new AbortController().signal },
+      'sys',
+      [{ role: 'user', content: 'go' }]
+    )
+    expect(chat).toHaveBeenCalledTimes(2)
+    expect(res.content).toBe('back online')
+  })
+
+  it('does NOT retry user aborts', async () => {
+    const controller = new AbortController()
+    const chat = vi.fn().mockImplementation(async () => {
+      controller.abort()
+      const e = new Error('This operation was aborted')
+      e.name = 'AbortError'
+      throw e
+    })
+    const res = await runLoop(
+      { chat: chat as any, tools: noopTools, execute: async () => 'ok', emit, agent: 'orchestrator', maxIterations: 5, signal: controller.signal },
+      'sys',
+      [{ role: 'user', content: 'go' }]
+    )
+    expect(chat).toHaveBeenCalledTimes(1)
+    expect(res.aborted).toBe(true)
   })
 })
 
@@ -207,5 +326,4 @@ describe('OllamaCloudClient error handling', () => {
     const client = new OllamaCloudClient({ apiKey: 'bad', baseUrl: 'https://api.ollama.com', model: 'm' })
     await expect(client.chat([], [], new AbortController().signal, {})).rejects.toThrow(/API key/i)
   })
-})
 })

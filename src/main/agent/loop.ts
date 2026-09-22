@@ -84,14 +84,42 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
   let toolCallsMade = 0
 
   const shouldStop = deps.shouldStop ?? (() => false)
-  // Hard cap from settings (default 16). The model decides when it is done by
-  // simply not calling tools anymore — like Cursor. No narration heuristics,
-  // no "continue" nudges: those caused endless reading loops. isComplete may
-  // still force exactly ONE targeted retry (code-in-prose guard).
+  // The model decides when it is done by simply not calling tools anymore —
+  // like Cursor. The loop NEVER ends for artificial reasons: the iteration
+  // cap pushes a "continue" nudge and keeps working (hard safety cap only),
+  // empty turns retry, stalls retry. Only the user (Stop) or the model
+  // (a real final answer) end a run.
   const maxLoops = Math.max(1, deps.maxIterations || 16)
+  const HARD_CAP = maxLoops * 4 // runaway safety net, far beyond any real task
+  let nudgesGiven = 0
   let nudgeUsed = false
+
+  // STALL / EMPTY-TURN RECOVERY: a turn that produces no text AND no tool
+  // calls used to be treated as a normal completion — the agent silently
+  // stopped after ~15s when a model died mid-think. Now: retry, and only
+  // end with a VISIBLE error after repeated failures.
+  const MAX_EMPTY_RETRIES = 2
+  let emptyTurns = 0
+  const chat = async (msgs: AgentMessage[]) => {
+    for (let attempt = 0; ; attempt++) {
+      if (shouldStop() || deps.signal.aborted) throw new Error('aborted')
+      try {
+        return await deps.chat(msgs, deps.tools, deps.signal, {
+          onToken: (t) => deps.emit({ type: 'token', text: t }),
+          onThinking: (t) => deps.emit({ type: 'thinking', text: t })
+        })
+      } catch (e: any) {
+        if (shouldStop() || deps.signal.aborted) throw new Error('aborted')
+        const retryable = e?.name === 'StreamStallError' || e?.name === 'AbortError' ||
+          /fetch failed|network|socket|ECONN|terminated/i.test(String(e?.message ?? ''))
+        if (attempt < 2 && retryable) continue
+        throw e
+      }
+    }
+  }
+
   try {
-    for (let loop = 0; loop < maxLoops; loop++) {
+    for (let loop = 0; loop < HARD_CAP; loop++) {
       if (shouldStop() || deps.signal.aborted) {
         throw new Error('aborted')
       }
@@ -101,16 +129,22 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
         messages.splice(0, messages.length, { role: 'system', content: system }, ...compacted)
       }
 
-      const res = await deps.chat(messages, deps.tools, deps.signal, {
-        onToken: (t) => deps.emit({ type: 'token', text: t }),
-        onThinking: (t) => deps.emit({ type: 'thinking', text: t })
-      })
+      // Beyond the configured iteration budget the run does NOT stop — it
+      // nudges the model to finish and continues to the hard cap. Real work
+      // keeps going; only the user or a genuine final answer end the run.
+      if (loop >= maxLoops && nudgesGiven < 2) {
+        nudgesGiven++
+        messages.push({ role: 'user', content: 'You are taking many steps. Finish the task now: apply the remaining edits, verify, and reply with the final result. Do not stop mid-task.' })
+      }
+
+      const res = await chat(messages)
 
       if (shouldStop() || deps.signal.aborted) {
         throw new Error('aborted')
       }
 
     if (res.toolCalls.length > 0) {
+      emptyTurns = 0
       messages.push({
         role: 'assistant',
         content: res.content ?? '',
@@ -185,6 +219,23 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
     }
 
     final = res.content ?? ''
+
+    // EMPTY-TURN GUARD: no text and no tool calls = the model died mid-think
+    // or the provider returned nothing. This is NOT a completion. Nudge and
+    // retry; only a long streak of empties ends the run — with a VISIBLE
+    // error, never a silent stop.
+    if (!final && res.toolCalls.length === 0) {
+      emptyTurns++
+      if (emptyTurns <= MAX_EMPTY_RETRIES) {
+        if (emptyTurns === MAX_EMPTY_RETRIES) {
+          messages.push({ role: 'user', content: 'Your last response was empty. Continue the task now: call a tool or answer. Do not return an empty reply.' })
+        }
+        continue
+      }
+      throw new Error('The model returned empty responses repeatedly (connection may be stalling). Try again, switch the model in Settings, or check your network.')
+    }
+    emptyTurns = 0
+
     if (final) messages.push({ role: 'assistant', content: final })
     // The model chose not to call any tools: normally final. isComplete may
     // force exactly ONE retry with a specific nudge (e.g. "apply your code").
@@ -205,6 +256,17 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
       toolCallsMade,
       aborted: deps.signal.aborted,
       error: e?.message ?? String(e)
+    }
+  }
+
+  // If we exit the loop via the hard cap without a real final answer, say so
+  // — never end silently. The user sees exactly why the run paused.
+  if (!final && !deps.signal.aborted) {
+    return {
+      content: '',
+      newMessages: messages.slice(1 + history.length),
+      toolCallsMade,
+      error: `Run paused after ${HARD_CAP} steps without a final answer. Everything done so far is kept in context — tell the agent to continue and it picks up where it left off.`
     }
   }
 
