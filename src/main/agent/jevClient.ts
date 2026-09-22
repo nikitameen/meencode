@@ -144,6 +144,73 @@ export async function jevTaskNeedsBigModel(settings: Settings, agent: string, ta
 
 // ---------------- code-focus partner ----------------
 
+/** Jev completion analytics: given the user's request and what actually
+ *  changed on disk, decide whether the work is genuinely DONE. This is the
+ *  quality gate that stops both premature "Done!" claims and endless
+ *  polishing. Returns 'complete' | 'fix' | null (null = Jev unavailable,
+ *  caller falls back to its own heuristics). */
+export async function jevCompletionVerdict(
+  settings: Settings,
+  request: string,
+  changes: { path: string; kind: string; afterExcerpt: string }[],
+  finalText: string
+): Promise<'complete' | 'fix' | null> {
+  if (changes.length === 0) return null // nothing to analyze — heuristics handle it
+  const answers = await jevDecide(
+    settings,
+    {
+      request,
+      changes: changes.map((c) => ({ path: c.path, kind: c.kind, content: c.afterExcerpt.slice(0, 800) })),
+      agentFinalReply: finalText.slice(0, 600)
+    },
+    {
+      done: {
+        type: 'choice',
+        instructions: 'A coding agent claims it finished the user request. Compare the request with the ACTUAL file changes shown. Is the requested behavior genuinely implemented and coherent? complete = changes plausibly fulfill the request. fix = changes are partial, miss the point, break something, or contradict the request.',
+        criteria: {
+          complete: 'The changes plausibly implement what was asked',
+          fix: 'The changes are incomplete, off-target, or visibly broken'
+        }
+      }
+    },
+    8000
+  )
+  const ans = (answers as Record<string, any> | null)?.done
+  if (!ans || ans.type !== 'choice') return null
+  return ans.choice === 'complete' ? 'complete' : 'fix'
+}
+
+/** Jev exploration sufficiency: should the agent keep exploring the codebase
+ *  or start editing? Stops wasteful read-loops. Returns 'edit' | 'explore' |
+ *  null (null = no signal, caller default). */
+export async function jevExplorationVerdict(
+  settings: Settings,
+  request: string,
+  recentToolCalls: string[],
+  turnsWithoutEdit: number
+): Promise<'edit' | 'explore' | null> {
+  // only consult Jev once wandering becomes suspicious
+  if (turnsWithoutEdit < 3) return null
+  const answers = await jevDecide(
+    settings,
+    { request, recentToolCalls, turnsWithoutEdit },
+    {
+      next: {
+        type: 'choice',
+        instructions: 'A coding agent is working on the request and has only been reading/searching so far. Based on the request and the files it examined, does it have ENOUGH context to edit correctly now, or does it genuinely need more exploration? edit = enough context — start editing. explore = the request touches areas not yet examined.',
+        criteria: {
+          edit: 'The examined files plausibly cover what the request needs',
+          explore: 'Key areas for this request have not been examined yet'
+        }
+      }
+    },
+    7000
+  )
+  const ans = (answers as Record<string, any> | null)?.next
+  if (!ans || ans.type !== 'choice') return null
+  return ans.choice === 'edit' ? 'edit' : 'explore'
+}
+
 /** Jev as the agent's coding partner: one call classifies the user's intent
  *  and returns a short focus directive injected into the run so the agent
  *  writes code instead of narrating. Returns null when Jev is unavailable —

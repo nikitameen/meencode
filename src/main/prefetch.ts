@@ -15,6 +15,8 @@ export interface PrefetchOptions {
   /** extra queries (e.g. LLM expansions of the user's request) */
   expansions?: string[]
   maxSlices?: number
+  /** rel paths already injected into this session's context — skipped */
+  excludeRels?: string[]
 }
 
 interface Card {
@@ -172,11 +174,15 @@ export function buildPrefetchPack(roots: string[], text: string, opts: PrefetchO
   }
 
   // ---- assemble under budget ----
-  const ranked = [...cards.values()].sort((a, b) => b.score - a.score).slice(0, maxSlices)
+  const excluded = new Set((opts.excludeRels ?? []).map((r) => r.replace(/^\d+:/, '')))
+  const ranked = [...cards.values()]
+    .filter((c) => !excluded.has(c.storeRel))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxSlices)
 
   const lines: string[] = []
   if (ranked.length > 0) {
-    lines.push('--- Relevant code (prefetched from the workspace index and your past work — verify with read_file before editing) ---')
+    lines.push('--- Relevant code (from the live workspace index — this is the CURRENT on-disk code; edit it directly with edit_file/write_file, no re-reading needed) ---')
   }
 
   // candidate files: everything found but not included (one cheap line each)

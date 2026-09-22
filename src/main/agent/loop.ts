@@ -20,6 +20,10 @@ export interface LoopDeps {
   /** return true when the agent's final text is a real completion; false forces another turn.
    *  May set nudge.text to control the forced follow-up message. */
   isComplete?(finalText: string, toolCallsMade: number, nudge: { text: string }): boolean
+  /** called before each model turn: may return (or resolve to) a user-role
+   *  nudge injected into the conversation (e.g. Jev deciding exploration is
+   *  sufficient — 'edit now'). */
+  beforeTurn?(turn: number, recentToolNames: string[], turnsWithoutEdit: number): string | null | Promise<string | null>
 }
 
 export interface LoopResult {
@@ -100,6 +104,8 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
   // end with a VISIBLE error after repeated failures.
   const MAX_EMPTY_RETRIES = 2
   let emptyTurns = 0
+  let turnsWithoutEdit = 0
+  let recentToolNames: string[] = []
   const chat = async (msgs: AgentMessage[]) => {
     for (let attempt = 0; ; attempt++) {
       if (shouldStop() || deps.signal.aborted) throw new Error('aborted')
@@ -137,6 +143,16 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
         messages.push({ role: 'user', content: 'You are taking many steps. Finish the task now: apply the remaining edits, verify, and reply with the final result. Do not stop mid-task.' })
       }
 
+      // Jev exploration gate: before asking the model again, let the decision
+      // layer interrupt wasteful read-loops with an 'edit now' nudge.
+      if (deps.beforeTurn && turnsWithoutEdit >= 3) {
+        const jevNudge = await deps.beforeTurn(loop, recentToolNames, turnsWithoutEdit)
+        if (jevNudge) {
+          messages.push({ role: 'user', content: jevNudge })
+          turnsWithoutEdit = 0
+        }
+      }
+
       const res = await chat(messages)
 
       if (shouldStop() || deps.signal.aborted) {
@@ -145,6 +161,9 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
 
     if (res.toolCalls.length > 0) {
       emptyTurns = 0
+      recentToolNames = res.toolCalls.map((c) => c.name)
+      const madeEdits = res.toolCalls.some((c) => c.name === 'write_file' || c.name === 'edit_file' || c.name === 'delete_file')
+      turnsWithoutEdit = madeEdits ? 0 : turnsWithoutEdit + 1
       messages.push({
         role: 'assistant',
         content: res.content ?? '',

@@ -15,17 +15,27 @@ process.on('uncaughtException', (e) => {
 })
 
 function loadDotEnv(): void {
-  try {
-    const envPath = path.join(app.getAppPath(), '.env')
-    if (!fs.existsSync(envPath)) return
-    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/)
-      if (m && process.env[m[1]] === undefined) {
-        process.env[m[1]] = m[2].replace(/^["']|["']$/g, '')
+  // In dev, getAppPath() is the project root. In a packaged app it points
+  // inside app.asar, so also check the exe folder and resources folder —
+  // drop a .env next to Meencode.exe to configure keys in production.
+  const candidates = [
+    path.join(app.getAppPath(), '.env'),
+    path.join(process.cwd(), '.env'),
+    path.join(path.dirname(app.getPath('exe')), '.env'),
+    path.join(process.resourcesPath ?? '', '.env')
+  ]
+  for (const envPath of candidates) {
+    try {
+      if (!fs.existsSync(envPath)) continue
+      for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+        const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/)
+        if (m && process.env[m[1]] === undefined) {
+          process.env[m[1]] = m[2].replace(/^["']|["']$/g, '')
+        }
       }
+    } catch {
+      // each candidate is optional
     }
-  } catch {
-    // .env is optional
   }
 }
 

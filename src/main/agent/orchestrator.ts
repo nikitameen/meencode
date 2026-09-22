@@ -19,7 +19,7 @@ import { buildLearningBlock } from '../learningStore'
 import { requestHashOf } from '../accessGraph'
 import { buildPrefetchPack } from '../prefetch'
 import { expandQuery } from '../semanticSearch'
-import { jevTaskNeedsBigModel, jevFocusDirective } from './jevClient'
+import { jevTaskNeedsBigModel, jevFocusDirective, jevCompletionVerdict, jevExplorationVerdict } from './jevClient'
 
 /** role-based model routing: respect per-agent overrides, then cheap vs big model defaults.
  *  With a Jev key + jevRouting enabled, a fast typed decision replaces the
@@ -119,6 +119,8 @@ export class AgentSession {
     const settings = this.io.getSettings()
     this.lastUserText = text
     this.forcedApplyRetry = 0
+    this.jevCompletion = null
+    this.jevReviewStarted = false
     if (!this.root) {
       this.emit({ type: 'run_start', runId: 'x' })
       this.emit({ type: 'run_end', runId: 'x', error: 'Open a workspace folder first.' })
@@ -208,7 +210,24 @@ export class AgentSession {
           maxIterations: settings.maxIterations,
           signal: controller.signal,
           shouldStop: () => this.stopRequested,
-          isComplete: (finalText, toolCallsMade, nudge) => this.isRunComplete(finalText, toolCallsMade, nudge)
+          isComplete: (finalText, toolCallsMade, nudge) => {
+            // kick off Jev diff review (async, verdict lands on this check or
+            // the forced next one) before the completion decision
+            if (settings.jevApiKey && (this.toolkit?.getChanges() ?? []).length > 0 && this.jevCompletion === null && !this.jevReviewStarted) {
+              this.jevReviewStarted = true
+              void this.jevReviewChanges(settings, text)
+            }
+            return this.isRunComplete(finalText, toolCallsMade, nudge)
+          },
+          beforeTurn: async (turn, recentTools, turnsWithoutEdit) => {
+            if (!settings.jevApiKey || settings.jevRouting === false) return null
+            const verdict = await jevExplorationVerdict(settings, this.lastUserText ?? '', recentTools, turnsWithoutEdit)
+            if (verdict === null) return null
+            this.emit({ type: 'jev_activity', label: `Jev · exploration gate`, detail: verdict === 'edit' ? 'enough context — nudged the agent to edit now' : 'key areas not yet examined — exploration continues' })
+            return verdict === 'edit'
+              ? 'You have examined enough context for this task. STOP reading/searching now and make the requested changes with write_file/edit_file. If a detail is truly missing, make the most reasonable choice and note it.'
+              : null
+          }
         },
         this.buildSystemPrompt(),
         this.history
@@ -336,21 +355,26 @@ Do not include greetings or explanations outside the bullet points.`
       await buildWorkspaceSnapshot(root)
       const snap = snapshotMarkdown(root)
       if (snap) out += `\n\n${snap}`
-      // Prefetch pack: symbol-level slices fused from BM25 + behavior prior,
-      // so the agent starts with the right code instead of searching for it.
-      // Pure-local and instant; the LLM expansion runs in the background to
-      // warm the cache for the next run (never blocks the first token).
-      try {
-        const pack = buildPrefetchPack(this.toolkit?.roots ?? [root], text, {})
-        if (pack) out += `\n\n${pack}`
-        const settings = this.io.getSettings()
-        if (settings.apiKey && settings.fastModel) {
-          void expandQuery(text, {
-            apiKey: settings.apiKey, baseUrl: settings.baseUrl, fastModel: settings.fastModel
-          }).catch(() => {})
-        }
-      } catch { /* prefetch must never break a run */ }
     }
+
+    // Per-turn prefetch: the symbol-level index answers BEFORE the agent
+    // starts exploring. Runs on EVERY turn (not just the first) so follow-up
+    // questions get indexed context too. Cached LLM expansions widen the net;
+    // slices already injected earlier in the session are excluded.
+    try {
+      const settings = this.io.getSettings()
+      const expansions = settings.apiKey && settings.fastModel
+        ? await expandQuery(text, { apiKey: settings.apiKey, baseUrl: settings.baseUrl, fastModel: settings.fastModel }).catch(() => [] as string[])
+        : []
+      const seenRels = this.history
+        .filter((m) => m.role === 'user')
+        .flatMap((m) => [...String(m.content ?? '').matchAll(/### (\S+?):\d+-\d+/g)].map((x) => x[1]))
+      const pack = buildPrefetchPack(this.toolkit?.roots ?? [root], text, {
+        expansions,
+        excludeRels: seenRels
+      })
+      if (pack) out += `\n\n${pack}`
+    } catch { /* prefetch must never break a run */ }
 
     // full auto-context: IDE state, git, workspace memory, relevant code, last failure
     try {
@@ -463,9 +487,45 @@ Do not include greetings or explanations outside the bullet points.`
       return false
     }
 
+    // ---- Jev completion analytics: edits exist — Jev REVIEWS the actual
+    // diff against the request before the run may end. Catches partial or
+    // off-target implementations that "look done". Async verdict is cached
+    // from a hook below; unavailable Jev falls back to accept.
+    if (this.jevCompletion === 'fix' && this.forcedApplyRetry < AgentSession.MAX_APPLY_RETRIES) {
+      this.forcedApplyRetry++
+      this.jevCompletion = null
+      this.emit({ type: 'jev_activity', label: 'Jev · change review', detail: 'gaps found in the implementation — agent sent back to fix them' })
+      nudge.text = `Jev reviewed your changes against the request and found gaps: ${this.jevCompletionNote || 'the implementation does not fully cover what was asked'}. Fix the gaps now with edit_file/write_file, then confirm.`
+      return false
+    }
+
     return true
   }
+  /** Jev's last completion-analytics verdict ('fix' forces one more turn) */
+  private jevCompletion: 'complete' | 'fix' | null = null
+  private jevCompletionNote = ''
+  private jevReviewStarted = false
   private lastUserText: string | null = null
+
+  /** Ask Jev to review the actual changes against the request (quality gate).
+   *  Fire-and-forget: the verdict is consumed by isRunComplete on the same or
+   *  next completion check. Never blocks or breaks the run. */
+  private async jevReviewChanges(settings: Settings, request: string): Promise<void> {
+    try {
+      const changes = this.toolkit?.getChanges() ?? []
+      if (changes.length === 0) return
+      const verdict = await jevCompletionVerdict(
+        settings,
+        request,
+        changes.map((c) => ({ path: c.path, kind: c.kind, afterExcerpt: c.after ?? '' })),
+        this.lastUserText ?? ''
+      )
+      if (verdict === 'fix') {
+        this.jevCompletion = 'fix'
+        this.jevCompletionNote = 'implementation is incomplete or off-target'
+      }
+    } catch { /* analytics is best-effort */ }
+  }
 
   reset() {
     this.history = []

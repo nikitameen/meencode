@@ -16,7 +16,7 @@ vi.mock('electron', () => ({
 const { updateSettings } = await import('../src/main/settingsStore')
 const { Toolkit } = await import('../src/main/agent/tools')
 const jev = await import('../src/main/agent/jevClient')
-const { localCommandVerdict, jevDecide, jevCommandVerdict, jevNoul, jevFocusDirective } = jev
+const { localCommandVerdict, jevDecide, jevCommandVerdict, jevNoul, jevFocusDirective, jevCompletionVerdict, jevExplorationVerdict } = jev
 type JevAnswer = jev.JevAnswer
 
 const SAFE_SETTINGS = { jevApiKey: 'sk_test', jevAutoApprove: true, jevRouting: true } as any
@@ -172,6 +172,65 @@ describe('jevFocusDirective — Jev as coding partner', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('down')))
     const d = await jevFocusDirective(SAFE_SETTINGS, 'add a feature')
     expect(d).toBeNull()
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('jevCompletionVerdict — Jev decision analytics on the actual diff', () => {
+  const changes = [{ path: 'a.ts', kind: 'modified', afterExcerpt: 'export function add(a,b){return a+b}' }]
+  const mk = (choice: string) => vi.fn().mockResolvedValue({
+    ok: true, status: 200,
+    json: async () => ({ data: { result: { answers: {
+      done: { type: 'choice', choice, probabilities: {}, confidence: 0.9 }
+    } } } })
+  })
+
+  it('returns complete when Jev accepts the changes', async () => {
+    vi.stubGlobal('fetch', mk('complete'))
+    expect(await jevCompletionVerdict(SAFE_SETTINGS, 'add a function', changes, 'done')).toBe('complete')
+    vi.unstubAllGlobals()
+  })
+
+  it('returns fix when Jev finds gaps', async () => {
+    vi.stubGlobal('fetch', mk('fix'))
+    expect(await jevCompletionVerdict(SAFE_SETTINGS, 'add a function', changes, 'done')).toBe('fix')
+    vi.unstubAllGlobals()
+  })
+
+  it('skips Jev when there are no changes to analyze', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await jevCompletionVerdict(SAFE_SETTINGS, 'add a function', [], 'done')).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('jevExplorationVerdict — stop wasteful read-loops', () => {
+  const mk = (choice: string) => vi.fn().mockResolvedValue({
+    ok: true, status: 200,
+    json: async () => ({ data: { result: { answers: {
+      next: { type: 'choice', choice, probabilities: {}, confidence: 0.9 }
+    } } } })
+  })
+
+  it('only consults Jev after 3+ turns without edits', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await jevExplorationVerdict(SAFE_SETTINGS, 'do it', ['read_file'], 2)).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it('edit verdict when context is sufficient', async () => {
+    vi.stubGlobal('fetch', mk('edit'))
+    expect(await jevExplorationVerdict(SAFE_SETTINGS, 'fix the bug', ['read_file', 'grep'], 4)).toBe('edit')
+    vi.unstubAllGlobals()
+  })
+
+  it('explore verdict when key areas are unexamined', async () => {
+    vi.stubGlobal('fetch', mk('explore'))
+    expect(await jevExplorationVerdict(SAFE_SETTINGS, 'add auth to the API', ['read_file'], 3)).toBe('explore')
     vi.unstubAllGlobals()
   })
 })
