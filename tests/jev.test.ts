@@ -16,7 +16,7 @@ vi.mock('electron', () => ({
 const { updateSettings } = await import('../src/main/settingsStore')
 const { Toolkit } = await import('../src/main/agent/tools')
 const jev = await import('../src/main/agent/jevClient')
-const { localCommandVerdict, jevDecide, jevCommandVerdict, jevNoul } = jev
+const { localCommandVerdict, jevDecide, jevCommandVerdict, jevNoul, jevFocusDirective } = jev
 type JevAnswer = jev.JevAnswer
 
 const SAFE_SETTINGS = { jevApiKey: 'sk_test', jevAutoApprove: true, jevRouting: true } as any
@@ -125,6 +125,53 @@ describe('jevCommandVerdict thresholds', () => {
     expect(await jevCommandVerdict(SAFE_SETTINGS, 'git status')).toBe('safe')
     expect(await jevCommandVerdict(SAFE_SETTINGS, 'rm -rf .')).toBe('risky')
     expect(fetchMock).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('jevFocusDirective — Jev as coding partner', () => {
+  const mk = (choice: string, ambiguity: number) => vi.fn().mockResolvedValue({
+    ok: true, status: 200,
+    json: async () => ({ data: { result: { answers: {
+      intent: { type: 'choice', choice, probabilities: {}, confidence: 1 },
+      ambiguity: { type: 'noul', noul: ambiguity }
+    } } } })
+  })
+
+  it('edit requests get a code-first directive', async () => {
+    vi.stubGlobal('fetch', mk('edit', 0.2))
+    const d = await jevFocusDirective(SAFE_SETTINGS, 'add a dark mode toggle')
+    expect(d).toMatch(/straight to edits/i)
+    vi.unstubAllGlobals()
+  })
+
+  it('ambiguous edit requests get a read-then-implement directive', async () => {
+    vi.stubGlobal('fetch', mk('edit', 0.9))
+    const d = await jevFocusDirective(SAFE_SETTINGS, 'improve the app')
+    expect(d).toMatch(/underspecified/i)
+    expect(d).toMatch(/read the relevant files FIRST/i)
+    vi.unstubAllGlobals()
+  })
+
+  it('explain requests forbid edits and require file:line citations', async () => {
+    vi.stubGlobal('fetch', mk('explain', 0))
+    const d = await jevFocusDirective(SAFE_SETTINGS, 'how does the router work?')
+    expect(d).toMatch(/No edits/i)
+    expect(d).toMatch(/file:line/i)
+    vi.unstubAllGlobals()
+  })
+
+  it('run requests go straight to commands', async () => {
+    vi.stubGlobal('fetch', mk('run', 0))
+    const d = await jevFocusDirective(SAFE_SETTINGS, 'run the test suite')
+    expect(d).toMatch(/run_command/i)
+    vi.unstubAllGlobals()
+  })
+
+  it('returns null (no directive) when Jev is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('down')))
+    const d = await jevFocusDirective(SAFE_SETTINGS, 'add a feature')
+    expect(d).toBeNull()
     vi.unstubAllGlobals()
   })
 })

@@ -141,3 +141,60 @@ export async function jevTaskNeedsBigModel(settings: Settings, agent: string, ta
   if (p === null) return null
   return p >= 0.6
 }
+
+// ---------------- code-focus partner ----------------
+
+/** Jev as the agent's coding partner: one call classifies the user's intent
+ *  and returns a short focus directive injected into the run so the agent
+ *  writes code instead of narrating. Returns null when Jev is unavailable —
+ *  the caller just skips the directive. */
+export async function jevFocusDirective(settings: Settings, userText: string): Promise<string | null> {
+  const answers = await jevDecide(
+    settings,
+    { request: userText },
+    {
+      intent: {
+        type: 'choice',
+        instructions: 'Classify the user\'s request to a coding agent by what they mainly want. edit = change/add/fix code or files. explain = understand code, architecture, or behavior. run = execute/verify via commands or tests. review = audit quality/bugs of existing code. setup = configure, scaffold, or install. chat = anything else.',
+        criteria: {
+          edit: 'Wants code or files changed, created, fixed, or refactored',
+          explain: 'Wants an explanation or understanding of existing code',
+          run: 'Wants commands, builds, or tests executed',
+          review: 'Wants existing code audited for bugs or quality',
+          setup: 'Wants configuration, scaffolding, or installation',
+          chat: 'General conversation, no concrete code work'
+        }
+      },
+      ambiguity: {
+        type: 'noul',
+        instructions: 'Is the request underspecified for direct implementation — would a careful engineer need to ask a clarifying question before writing correct code?',
+        criteria: {
+          true: 'Requirements are vague, contradictory, or missing key details',
+          false: 'The request is specific enough to implement directly'
+        }
+      }
+    },
+    7000
+  )
+  const ans = answers as Record<string, any> | null
+  if (!ans?.intent || ans.intent.type !== 'choice') return null
+  const intent = String(ans.intent.choice ?? 'edit')
+  const ambiguous = jevNoul(answers, 'ambiguity') ?? 0
+
+  switch (intent) {
+    case 'edit':
+      return ambiguous >= 0.75
+        ? 'FOCUS (Jev partner): the request is underspecified. Read the relevant files FIRST with read_file, infer the most reasonable interpretation from the code, implement it, and state the interpretation you chose in ONE sentence at the end. Do not ask questions unless implementation is impossible.'
+        : 'FOCUS (Jev partner): this is a code-change request. Go straight to edits: read only what is needed (1-2 calls), then write_file/edit_file. No plan narration, no step summaries — code first, one-line confirmation after.'
+    case 'run':
+      return 'FOCUS (Jev partner): this is a run/verify request. Execute the commands/tests with run_command, report exit codes and failures concisely, and fix what fails if the fix is obvious.'
+    case 'review':
+      return 'FOCUS (Jev partner): this is a code-review request. Read the target code, list concrete findings (file:line, issue, suggested fix), and only apply edits if the user asked for fixes.'
+    case 'setup':
+      return 'FOCUS (Jev partner): this is a setup/scaffold request. Create or modify the config files directly, verify the setup works, and report what was configured in one line each.'
+    case 'explain':
+      return 'FOCUS (Jev partner): this is an explanation request. Answer directly from the code (read files as needed). No edits — cite file:line for every claim.'
+    default:
+      return 'FOCUS (Jev partner): answer the user directly and concisely.'
+  }
+}

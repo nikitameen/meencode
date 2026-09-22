@@ -6,6 +6,7 @@ export type FeedItem =
   | { id: string; kind: 'user'; text: string }
   | { id: string; kind: 'assistant'; text: string; thinking?: string; streaming?: boolean; runId?: string; feedback?: 'positive' | 'negative' | null }
   | { id: string; kind: 'tool'; agent: string; name: string; argsSummary: string; status: 'running' | 'ok' | 'error'; result?: string; ms?: number }
+  | { id: string; kind: 'quiet-explore'; agent: string; count: number; names: string[]; lastStatus?: 'ok' | 'error' }
   | { id: string; kind: 'subagent'; agent: string; task: string; state: 'start' | 'end'; summary?: string }
   | { id: string; kind: 'plan'; steps: PlanStep[] }
   | { id: string; kind: 'change'; change: FileChange }
@@ -270,6 +271,22 @@ export const useStore = create<State & Actions>((set, get) => ({
         const isCmd = e.name === 'run_command'
         const isMcp = e.name.includes('.')
         const command = isCmd ? String((e.args as any)?.command ?? '') : ''
+        // Quiet chat: read/search/list tool rows are folded into ONE compact
+        // "exploring" chip instead of spamming a row per call. Real actions
+        // (edits, writes, deletes, commands, subagents) always get their row.
+        const noisy = ['read_file', 'search_files', 'grep', 'search_codebase', 'list_dir'].includes(e.name)
+        if (noisy) {
+          const last = feed[feed.length - 1]
+          if (last && last.kind === 'quiet-explore' && (last as any).agent === e.agent) {
+            updateSession({
+              feed: feed.map((f, i) => i === feed.length - 1 ? { ...f, count: ((f as any).count ?? 1) + 1, names: [...((f as any).names ?? []), e.name] } : f)
+            })
+          } else {
+            const quietItem: any = { id: `q-${e.id}`, kind: 'quiet-explore', agent: e.agent, count: 1, names: [e.name] }
+            updateSession({ feed: pushBeforeStreamingAssistant(feed, quietItem as FeedItem) })
+          }
+          break
+        }
         const toolItem: FeedItem = {
           id: e.id,
           kind: 'tool',
@@ -287,8 +304,12 @@ export const useStore = create<State & Actions>((set, get) => ({
         break
       }
       case 'tool_end': {
+        const exploreStatus = e.ok ? 'ok' : 'error'
         updateSession({
-          feed: feed.map((f) => (f.id === e.id && f.kind === 'tool' ? { ...f, status: e.ok ? 'ok' : 'error', result: e.result, ms: e.ms } : f)),
+          feed: feed.map((f) =>
+            f.id === `q-${e.id}` && f.kind === 'quiet-explore'
+              ? { ...f, lastStatus: exploreStatus }
+              : (f.id === e.id && f.kind === 'tool' ? { ...f, status: exploreStatus, result: e.result, ms: e.ms } : f)),
           terminal: sess.terminal.map((t) => (t.id === e.id ? { ...t, running: false, exit: e.ok ? t.exit : 1 } : t))
         })
         break

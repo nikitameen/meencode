@@ -361,6 +361,8 @@ function FeedItemView({ item }: { item: import('../store').FeedItem }) {
       )
     case 'tool':
       return <ToolItem {...item} />
+    case 'quiet-explore':
+      return <QuietExploreChip {...item} />
     case 'subagent':
       return <SubagentItem {...item} />
     case 'plan':
@@ -465,13 +467,21 @@ function ErrorCard({ text }: { text: string }) {
 function Thinking({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   if (!text || !text.trim()) return null
+  if (!open) {
+    // quiet mode: a minimal dot — the chat stays focused on code, not logs
+    return (
+      <button className="thinking-quiet-dot" title="Reasoning — click to expand" onClick={() => setOpen(true)}>
+        <Icon name="chevronRight" size={9} />
+      </button>
+    )
+  }
   return (
     <div className="thinking-wrap">
-      <button className="thinking-toggle" onClick={() => setOpen(!open)}>
-        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={10} />
+      <button className="thinking-toggle" onClick={() => setOpen(false)}>
+        <Icon name="chevronDown" size={10} />
         Thinking ({text.trim().split(/\s+/).length} words)
       </button>
-      {open && <pre className="thinking-body">{text.trim()}</pre>}
+      <pre className="thinking-body">{text.trim()}</pre>
     </div>
   )
 }
@@ -699,6 +709,18 @@ function CodeBlock({ lang, content }: { lang: string; content: string }) {
         </button>
       </div>
       <pre className="msg-code"><code>{content}</code></pre>
+    </div>
+  )
+}
+
+function QuietExploreChip(props: { id: string; kind: 'quiet-explore'; agent: string; count: number; names: string[]; lastStatus?: 'ok' | 'error' }) {
+  const color = AGENT_COLORS[props.agent] ?? 'var(--dim)'
+  const failed = props.lastStatus === 'error'
+  return (
+    <div className="quiet-explore-chip" style={{ borderLeftColor: color }} title={`Exploring: ${props.names.join(', ')}`}>
+      <Icon name="spinner" size={9} />
+      <span>exploring codebase ×{props.count}</span>
+      {failed && <span className="quiet-explore-fail">last call failed</span>}
     </div>
   )
 }

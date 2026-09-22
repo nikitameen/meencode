@@ -19,7 +19,7 @@ import { buildLearningBlock } from '../learningStore'
 import { requestHashOf } from '../accessGraph'
 import { buildPrefetchPack } from '../prefetch'
 import { expandQuery } from '../semanticSearch'
-import { jevTaskNeedsBigModel } from './jevClient'
+import { jevTaskNeedsBigModel, jevFocusDirective } from './jevClient'
 
 /** role-based model routing: respect per-agent overrides, then cheap vs big model defaults.
  *  With a Jev key + jevRouting enabled, a fast typed decision replaces the
@@ -151,6 +151,18 @@ export class AgentSession {
 
     try {
       let content = await this.enrichContext(text, attachedFile, ide ?? null)
+
+      // Jev partner focus directive: classify the request and steer the run
+      // toward code (no plan narration, no reasoning dumps). Fire-and-forget
+      // with a short timeout; never blocks or breaks the run.
+      let focusDirective = ''
+      try {
+        if (settings.jevApiKey && settings.jevRouting !== false) {
+          focusDirective = (await jevFocusDirective(settings, text)) ?? ''
+        }
+      } catch { /* partner advice is best-effort */ }
+      if (focusDirective) content += `\n\n${focusDirective}`
+
       const userImages = (images ?? []).slice(0, 4)
       if (userImages.length > 0) {
         // vision request: content parts (text + images) per the OpenAI-compatible schema
