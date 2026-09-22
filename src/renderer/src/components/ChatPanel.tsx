@@ -15,6 +15,8 @@ export function ChatPanel() {
   const newSession = useStore((s) => s.newSession)
   const closeSession = useStore((s) => s.closeSession)
   const settings = useStore((s) => s.settings)
+  const chatWidth = useStore((s) => s.chatWidth)
+  const setChatWidth = useStore((s) => s.setChatWidth)
   const activeTab = useStore((s) => s.activeTab)
   const files = useStore((s) => s.files)
   const [text, setText] = useState('')
@@ -140,7 +142,27 @@ export function ChatPanel() {
   const hiddenCount = sessions.length - visibleTabs.length
 
   return (
-    <div className="chat-panel">
+    <div className="chat-panel" style={{ width: chatWidth }}>
+      <div
+        className="chat-resizer"
+        title="Drag to resize the chat panel"
+        onMouseDown={(e) => {
+          e.preventDefault()
+          const startX = e.clientX
+          const startW = chatWidth
+          const onMove = (ev: MouseEvent) => {
+            setChatWidth(startW - (ev.clientX - startX))
+          }
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove)
+            window.removeEventListener('mouseup', onUp)
+            document.body.classList.remove('chat-resizing')
+          }
+          document.body.classList.add('chat-resizing')
+          window.addEventListener('mousemove', onMove)
+          window.addEventListener('mouseup', onUp)
+        }}
+      />
       <div className="chat-header">
         <span className="chat-title">
           <Icon name="sparkle" size={13} /> Meencode Agent
@@ -363,6 +385,8 @@ function FeedItemView({ item }: { item: import('../store').FeedItem }) {
       return <ToolItem {...item} />
     case 'quiet-explore':
       return <QuietExploreChip {...item} />
+    case 'jev':
+      return <JevNote {...item} />
     case 'subagent':
       return <SubagentItem {...item} />
     case 'plan':
@@ -709,6 +733,16 @@ function CodeBlock({ lang, content }: { lang: string; content: string }) {
         </button>
       </div>
       <pre className="msg-code"><code>{content}</code></pre>
+    </div>
+  )
+}
+
+function JevNote(props: { id: string; kind: 'jev'; label: string; detail: string }) {
+  return (
+    <div className="jev-note" title={props.detail}>
+      <span className="jev-note-badge">Jev</span>
+      <span className="jev-note-label">{props.label.replace(/^Jev · /, '')}</span>
+      <span className="jev-note-detail">{props.detail}</span>
     </div>
   )
 }

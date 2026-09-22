@@ -34,13 +34,19 @@ function modelForAgent(agent: SubAgentName | 'orchestrator', settings: Settings)
 /** Jev routing: classify the actual task difficulty (one fast /v1/systemone
  *  call, ~1s) instead of guessing by role. Returns null when Jev is
  *  unavailable — the caller falls back to role-based defaults. */
-async function modelForTask(agent: SubAgentName, task: string, settings: Settings): Promise<string | null> {
+async function modelForTask(agent: SubAgentName, task: string, settings: Settings, emit?: (e: import('../../shared/types').AgentEventPayload) => void): Promise<string | null> {
   if (!settings.jevApiKey || settings.jevRouting === false) return null
   const needsBig = await jevTaskNeedsBigModel(settings, agent, task)
   if (needsBig === null) return null
   const override = settings.subAgentModels?.[agent]
   if (override) return override
-  return needsBig ? settings.model : settings.fastModel || settings.model
+  const model = needsBig ? settings.model : settings.fastModel || settings.model
+  emit?.({
+    type: 'jev_activity',
+    label: `Jev · routed ${agent} task`,
+    detail: `${needsBig ? 'complex — big model' : 'simple — fast model'} (${truncate(task, 60)})`
+  })
+  return model
 }
 
 export interface AgentIO {
@@ -90,6 +96,7 @@ export class AgentSession {
           this.activeCommands.delete(child)
           this.commandStopHandlers.delete(child)
         },
+        onJevActivity: (label, detail) => this.emit({ type: 'jev_activity', label, detail }),
         onUserCorrection: (workspace, relPath, agentAfter, userAfter, runId) => {
           const { addCorrection, invalidateLearningCache } = require('../learningStore') as typeof import('../learningStore')
           addCorrection(workspace, relPath, agentAfter, userAfter, runId)
@@ -158,7 +165,18 @@ export class AgentSession {
       let focusDirective = ''
       try {
         if (settings.jevApiKey && settings.jevRouting !== false) {
+          const t0 = Date.now()
           focusDirective = (await jevFocusDirective(settings, text)) ?? ''
+          if (focusDirective) {
+            const kind = focusDirective.includes('underspecified') ? 'ambiguous request — read first, then implement'
+              : focusDirective.includes('code-change request') ? 'code-change request — going straight to edits'
+              : focusDirective.includes('run/verify') ? 'run/verify request'
+              : focusDirective.includes('code-review') ? 'code-review request'
+              : focusDirective.includes('setup/scaffold') ? 'setup request'
+              : focusDirective.includes('explanation request') ? 'explanation request'
+              : 'request classified'
+            this.emit({ type: 'jev_activity', label: `Jev · ${kind}`, detail: `intent classified in ${Date.now() - t0}ms` })
+          }
         }
       } catch { /* partner advice is best-effort */ }
       if (focusDirective) content += `\n\n${focusDirective}`
@@ -550,7 +568,7 @@ Do not include greetings or explanations outside the bullet points.`
     let result
     try {
       // Jev routing decides the model from task difficulty before the run starts
-      const model = (await modelForTask(agentName, task, settings)) ?? modelForAgent(agentName, settings)
+      const model = (await modelForTask(agentName, task, settings, (e) => this.emit(e))) ?? modelForAgent(agentName, settings)
       result = await runLoop(
         {
           chat: (msgs, tl, signal, cb) =>

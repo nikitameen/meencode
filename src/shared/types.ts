@@ -68,6 +68,7 @@ type AgentEventBase =
   | { type: 'tool_end'; id: string; agent: string; name: string; ok: boolean; result: string; ms: number }
   | { type: 'subagent_start'; agent: string; task: string }
   | { type: 'subagent_end'; agent: string; summary: string }
+  | { type: 'jev_activity'; label: string; detail: string }
   | { type: 'plan'; steps: PlanStep[] }
   | { type: 'plan_update'; id: string; status: PlanStep['status'] }
   | { type: 'file_change'; change: FileChange }

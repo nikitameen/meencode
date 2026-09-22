@@ -30,6 +30,8 @@ export interface ToolkitHooks {
   autoRun(): boolean
   onCommandSpawn?(child: import('node:child_process').ChildProcess, onStop: () => void): void
   onCommandClose?(child: import('node:child_process').ChildProcess): void
+  /** Called when the Jev decision layer acts (command gate, routing) so the UI can show it. */
+  onJevActivity?(label: string, detail: string): void
   /** Called when the user edits a file that the agent changed in this run, so the agent can learn from the correction. */
   onUserCorrection?(workspace: string | null, relPath: string, agentAfter: string, userAfter: string, runId: string): void
 }
@@ -504,8 +506,15 @@ export class Toolkit {
       let ok = false
       if (settings.jevApiKey && settings.jevAutoApprove !== false) {
         const verdict = await jevCommandVerdict(settings, command)
-        if (verdict === 'safe') ok = true
-        else ok = await this.hooks.approve(command)
+        if (verdict === 'safe') {
+          ok = true
+          this.hooks.onJevActivity?.(`Jev · command approved`, `"${command.slice(0, 60)}" — safe to run automatically`)
+        } else {
+          if (verdict === 'risky') {
+            this.hooks.onJevActivity?.(`Jev · command flagged`, `"${command.slice(0, 60)}" — risky, asking for approval`)
+          }
+          ok = await this.hooks.approve(command)
+        }
       } else {
         ok = await this.hooks.approve(command)
       }

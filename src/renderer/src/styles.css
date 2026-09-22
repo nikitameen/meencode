@@ -203,9 +203,32 @@ a { color: var(--accent); cursor: pointer; }
 
 /* ---------------- chat panel ---------------- */
 .chat-panel {
+  position: relative;
   width: 420px; flex-shrink: 0; display: flex; flex-direction: column;
   background: var(--bg1); border-left: 1px solid var(--border);
 }
+/* drag handle: thin visible strip on the panel's left edge */
+.chat-resizer {
+  position: absolute; left: -3px; top: 0; bottom: 0; width: 6px;
+  cursor: col-resize; z-index: 10;
+}
+.chat-resizer:hover, .chat-resizer:active { background: var(--accent-dim); }
+body.chat-resizing { cursor: col-resize; user-select: none; }
+body.chat-resizing * { pointer-events: none !important; }
+
+/* Jev decision-layer notes */
+.jev-note {
+  display: flex; align-items: center; gap: 7px; margin-left: 6px; margin-bottom: 4px;
+  font-size: 11px; color: var(--dim); background: var(--bg1);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 9px;
+}
+.jev-note-badge {
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;
+  background: var(--accent-dim); color: var(--accent);
+  border-radius: 4px; padding: 1px 5px;
+}
+.jev-note-label { font-weight: 600; color: var(--accent); }
+.jev-note-detail { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 14px; height: 36px; border-bottom: 1px solid var(--border);

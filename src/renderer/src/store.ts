@@ -7,6 +7,7 @@ export type FeedItem =
   | { id: string; kind: 'assistant'; text: string; thinking?: string; streaming?: boolean; runId?: string; feedback?: 'positive' | 'negative' | null }
   | { id: string; kind: 'tool'; agent: string; name: string; argsSummary: string; status: 'running' | 'ok' | 'error'; result?: string; ms?: number }
   | { id: string; kind: 'quiet-explore'; agent: string; count: number; names: string[]; lastStatus?: 'ok' | 'error' }
+  | { id: string; kind: 'jev'; label: string; detail: string }
   | { id: string; kind: 'subagent'; agent: string; task: string; state: 'start' | 'end'; summary?: string }
   | { id: string; kind: 'plan'; steps: PlanStep[] }
   | { id: string; kind: 'change'; change: FileChange }
@@ -40,6 +41,8 @@ interface State {
   treeFilter: string
   sidebarOpen: boolean
   chatOpen: boolean
+  /** user-resizable chat panel width in px (default 420, clamped 320-720) */
+  chatWidth: number
   terminalOpen: boolean
   tabs: Tab[]
   activeTab: string | null
@@ -92,6 +95,7 @@ interface Actions {
   set<K extends keyof State>(key: K, value: State[K]): void
   toggleTerminal(): void
   toggleChat(): void
+  setChatWidth(w: number): void
   toggleSidebar(): void
   refreshSavedSessions(): Promise<void>
   loadSavedSession(id: string): Promise<void>
@@ -145,6 +149,7 @@ export const useStore = create<State & Actions>((set, get) => ({
   treeFilter: '',
   sidebarOpen: true,
   chatOpen: true,
+  chatWidth: 420,
   terminalOpen: false,
   tabs: [],
   activeTab: null,
@@ -312,6 +317,11 @@ export const useStore = create<State & Actions>((set, get) => ({
               : (f.id === e.id && f.kind === 'tool' ? { ...f, status: exploreStatus, result: e.result, ms: e.ms } : f)),
           terminal: sess.terminal.map((t) => (t.id === e.id ? { ...t, running: false, exit: e.ok ? t.exit : 1 } : t))
         })
+        break
+      }
+      case 'jev_activity': {
+        const jevItem: FeedItem = { id: `jev-${uid()}`, kind: 'jev', label: e.label, detail: e.detail }
+        updateSession({ feed: pushBeforeStreamingAssistant(feed, jevItem) })
         break
       }
       case 'subagent_start': {
@@ -637,6 +647,9 @@ export const useStore = create<State & Actions>((set, get) => ({
   },
   toggleChat() {
     set({ chatOpen: !get().chatOpen })
+  },
+  setChatWidth(w: number) {
+    set({ chatWidth: Math.max(320, Math.min(720, Math.round(w))) })
   },
   toggleSidebar() {
     set({ sidebarOpen: !get().sidebarOpen })
