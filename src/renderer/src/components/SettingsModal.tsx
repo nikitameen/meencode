@@ -19,6 +19,9 @@ export function SettingsModal() {
   const [loadingModels, setLoadingModels] = useState(false)
   const [subModels, setSubModels] = useState<Record<string, string>>(settings?.subAgentModels ?? {})
   const [mcpServers, setMcpServers] = useState<import('../../../shared/types').MCPServerConfig[]>(settings?.mcpServers ?? [])
+  const [jevKey, setJevKey] = useState(settings?.jevApiKey ?? '')
+  const [jevAutoApprove, setJevAutoApprove] = useState(settings?.jevAutoApprove ?? true)
+  const [jevRouting, setJevRouting] = useState(settings?.jevRouting ?? true)
 
   useEffect(() => {
     if (!open) return
@@ -30,6 +33,9 @@ export function SettingsModal() {
     setAutoRun(settings?.autoRunCommands ?? false)
     setSubModels(settings?.subAgentModels ?? {})
     setMcpServers(settings?.mcpServers ?? [])
+    setJevKey(settings?.jevApiKey ?? '')
+    setJevAutoApprove(settings?.jevAutoApprove ?? true)
+    setJevRouting(settings?.jevRouting ?? true)
   }, [open, settings])
 
   const loadModels = async () => {
@@ -52,7 +58,7 @@ export function SettingsModal() {
   if (!open) return null
 
   const save = async () => {
-    await window.meencode.settings.update({ apiKey, baseUrl, model, fastModel, subAgentModels: subModels, maxIterations: maxIter, autoRunCommands: autoRun, mcpServers })
+    await window.meencode.settings.update({ apiKey, baseUrl, model, fastModel, subAgentModels: subModels, maxIterations: maxIter, autoRunCommands: autoRun, mcpServers, jevApiKey: jevKey, jevAutoApprove, jevRouting })
     const s = await window.meencode.settings.get()
     set('settings', s)
     setSaved(true)
@@ -70,8 +76,22 @@ export function SettingsModal() {
         </div>
         <div className="modal-body">
           <div className="field">
+            <label>AI Provider Preset</label>
+            <div className="welcome-chips" style={{ marginTop: 4, marginBottom: 8 }}>
+              <button
+                type="button"
+                className={`chip ${baseUrl.includes('ollama') ? 'on' : ''}`}
+                onClick={() => {
+                  setBaseUrl('https://ollama.com')
+                }}
+              >
+                🦙 Ollama Cloud
+              </button>
+            </div>
+          </div>
+          <div className="field">
             <label>
-              Ollama Cloud API key
+              API Key
               <a className="field-link" onClick={() => void window.meencode.openExternal('https://ollama.com/sign-in')}>
                 Get a key <Icon name="external" size={10} />
               </a>
@@ -79,7 +99,7 @@ export function SettingsModal() {
             <div className="key-row">
               <input
                 type={showKey ? 'text' : 'password'}
-                placeholder="Paste your Ollama Cloud key"
+                placeholder="Paste your Ollama Cloud API key"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
               />
@@ -87,12 +107,12 @@ export function SettingsModal() {
                 <Icon name={showKey ? 'eyeOff' : 'eye'} size={14} />
               </button>
             </div>
-            <div className="field-hint">Also read from the OLLAMA_API_KEY environment variable or a .env file.</div>
+            <div className="field-hint">Used for authentication with the chat endpoint. Also read from the OLLAMA_API_KEY environment variable or a .env file.</div>
           </div>
           <div className="field">
             <label>Base URL</label>
-            <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.ollama.com" />
-            <div className="field-hint">OpenAI-compatible /v1/chat/completions endpoint of Ollama Cloud.</div>
+            <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://ollama.com" />
+            <div className="field-hint">OpenAI-compatible /v1/chat/completions endpoint.</div>
           </div>
           <div className="field">
             <label>
@@ -219,6 +239,51 @@ export function SettingsModal() {
                 <Icon name="plus" size={12} /> Add Playwright preset
               </button>
             </div>
+          </div>
+
+          <div className="field">
+            <label>
+              Jev AI decision layer (optional)
+              <a className="field-link" onClick={() => void window.meencode.openExternal('https://thejevai.com/settings/apikeys')}>
+                Get a key <Icon name="external" size={10} />
+              </a>
+            </label>
+            <div className="field-hint">
+              Jev (thejevai.com) is a typed decision API, not a chat model — it makes the agent faster by
+              auto-approving safe commands and routing easy tasks to the fast model. Also read from the JEV_API_KEY environment variable.
+            </div>
+            <div className="key-row">
+              <input
+                type={showKey ? 'text' : 'password'}
+                placeholder="sk_... (Jev AI key)"
+                value={jevKey}
+                onChange={(e) => setJevKey(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="field toggle-field">
+            <label className="toggle">
+              <input type="checkbox" checked={jevAutoApprove} disabled={!jevKey} onChange={(e) => setJevAutoApprove(e.target.checked)} />
+              <span className="toggle-track"><span className="toggle-thumb" /></span>
+              <span>
+                Jev auto-approves safe commands
+                <span className="field-hint">
+                  Read-only, test, and build commands run without waiting for your approval. Destructive commands always ask. Falls back to human approval if Jev is unreachable.
+                </span>
+              </span>
+            </label>
+          </div>
+          <div className="field toggle-field">
+            <label className="toggle">
+              <input type="checkbox" checked={jevRouting} disabled={!jevKey} onChange={(e) => setJevRouting(e.target.checked)} />
+              <span className="toggle-track"><span className="toggle-thumb" /></span>
+              <span>
+                Jev routes sub-agent tasks by difficulty
+                <span className="field-hint">
+                  One fast Jev call classifies each task; easy tasks use the fast model, hard tasks the big model — instead of role-based guessing.
+                </span>
+              </span>
+            </label>
           </div>
         </div>
         <div className="modal-footer">

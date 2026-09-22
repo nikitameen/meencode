@@ -19,13 +19,28 @@ import { buildLearningBlock } from '../learningStore'
 import { requestHashOf } from '../accessGraph'
 import { buildPrefetchPack } from '../prefetch'
 import { expandQuery } from '../semanticSearch'
+import { jevTaskNeedsBigModel } from './jevClient'
 
-/** role-based model routing: respect per-agent overrides, then cheap vs big model defaults */
+/** role-based model routing: respect per-agent overrides, then cheap vs big model defaults.
+ *  With a Jev key + jevRouting enabled, a fast typed decision replaces the
+ *  role heuristic: easy tasks go to the fast model, hard ones to the big model. */
 function modelForAgent(agent: SubAgentName | 'orchestrator', settings: Settings): string {
   const override = settings.subAgentModels?.[agent]
   if (override) return override
   if (agent === 'coder' || agent === 'debugger' || agent === 'orchestrator') return settings.model
   return settings.fastModel || settings.model
+}
+
+/** Jev routing: classify the actual task difficulty (one fast /v1/systemone
+ *  call, ~1s) instead of guessing by role. Returns null when Jev is
+ *  unavailable — the caller falls back to role-based defaults. */
+async function modelForTask(agent: SubAgentName, task: string, settings: Settings): Promise<string | null> {
+  if (!settings.jevApiKey || settings.jevRouting === false) return null
+  const needsBig = await jevTaskNeedsBigModel(settings, agent, task)
+  if (needsBig === null) return null
+  const override = settings.subAgentModels?.[agent]
+  if (override) return override
+  return needsBig ? settings.model : settings.fastModel || settings.model
 }
 
 export interface AgentIO {
@@ -496,13 +511,15 @@ Do not include greetings or explanations outside the bullet points.`
 
     let result
     try {
+      // Jev routing decides the model from task difficulty before the run starts
+      const model = (await modelForTask(agentName, task, settings)) ?? modelForAgent(agentName, settings)
       result = await runLoop(
         {
           chat: (msgs, tl, signal, cb) =>
             new OllamaCloudClient({
               apiKey: settings.apiKey,
               baseUrl: settings.baseUrl,
-              model: modelForAgent(agentName, settings)
+              model
             }).chat(msgs, tl, signal, cb),
           tools,
           execute: (call) => this.executeToolWithRetry(call, agentName),

@@ -40,6 +40,12 @@ export type Settings = {
   roots: string[]
   /** MCP servers configured for this workspace */
   mcpServers?: MCPServerConfig[]
+  /** Jev AI decision layer (https://thejevai.com/v1/systemone) — NOT the chat backend */
+  jevApiKey?: string
+  /** auto-approve safe shell commands via Jev risk gate (default true when key set) */
+  jevAutoApprove?: boolean
+  /** route sub-agent tasks to fast/big model via Jev difficulty classification */
+  jevRouting?: boolean
 }
 
 export type MCPServerConfig = {

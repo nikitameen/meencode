@@ -52,14 +52,14 @@ export class OllamaCloudClient {
       throw new Error(`Server answered 405 Method Not Allowed. Open Settings and set the Base URL to https://ollama.com (api.ollama.com redirects and breaks streaming).`)
     }
     if (res.status === 401 || res.status === 403) {
-      throw new Error('Invalid or missing Ollama Cloud API key. Add your key in Settings.')
+      throw new Error('Invalid or missing API key. Verify your key in Settings.')
     }
     if (res.status === 404) {
-      throw new Error(`Model "${model}" was not found on Ollama Cloud. Pick another model in Settings (use "Refresh list").`)
+      throw new Error(`Model "${model}" was not found on provider endpoint. Pick another model in Settings.`)
     }
     if (!res.ok) {
       const t = await res.text().catch(() => '')
-      throw new Error(`Ollama Cloud error ${res.status}: ${t.slice(0, 300)}`)
+      throw new Error(`API provider error ${res.status}: ${t.slice(0, 300)}`)
     }
 
     return parseSSE(res.body!, cb)

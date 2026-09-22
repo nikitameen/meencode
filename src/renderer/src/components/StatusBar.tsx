@@ -62,7 +62,7 @@ export function StatusBar() {
 
   // Rough token estimate: chars / 4
   const totalContextChars = activeSession?.feed.reduce((acc, f) => {
-    if (f.kind === 'user' || f.kind === 'assistant') return acc + (f as any).text?.length ?? 0
+    if (f.kind === 'user' || f.kind === 'assistant') return acc + ((f as any).text?.length ?? 0)
     return acc
   }, 0) ?? 0
   const tokenEstimate = Math.round(totalContextChars / 4)

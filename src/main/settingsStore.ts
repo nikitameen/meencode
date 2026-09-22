@@ -13,7 +13,10 @@ const DEFAULTS: Settings = {
   autoRunCommands: false,
   workspace: null,
   roots: [],
-  mcpServers: []
+  mcpServers: [],
+  jevApiKey: '',
+  jevAutoApprove: true,
+  jevRouting: true
 }
 
 let settings: Settings = { ...DEFAULTS }
@@ -46,6 +49,9 @@ function migrate(raw: Record<string, unknown>): Settings {
   if (!s.fastModel) s.fastModel = s.model
   if (!s.subAgentModels || typeof s.subAgentModels !== 'object') s.subAgentModels = {}
   if (!Array.isArray(s.mcpServers)) s.mcpServers = []
+  s.jevApiKey = typeof s.jevApiKey === 'string' ? s.jevApiKey : ''
+  s.jevAutoApprove = s.jevAutoApprove !== false
+  s.jevRouting = s.jevRouting !== false
   // migrate legacy single workspace -> roots[0]
   let roots = normalizeRoots(raw.roots)
   const legacy = raw.workspace
@@ -66,6 +72,7 @@ export function loadSettings(): Settings {
     settings = { ...DEFAULTS }
   }
   if (process.env.OLLAMA_API_KEY && !settings.apiKey) settings.apiKey = process.env.OLLAMA_API_KEY
+  if (process.env.JEV_API_KEY) settings.jevApiKey = process.env.JEV_API_KEY
   return settings
 }
 

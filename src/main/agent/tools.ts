@@ -9,6 +9,7 @@ import { recordAccess, type AccessKind } from '../accessGraph'
 import { recordFailedCommand } from '../agentContext'
 import { semanticSearch } from '../semanticSearch'
 import { getSettings } from '../settingsStore'
+import { jevCommandVerdict } from './jevClient'
 import { mcpManager, type MCPToolDef } from '../mcpManager'
 import { compareScreenshots } from '../visionTools'
 
@@ -481,7 +482,17 @@ export class Toolkit {
   private async runCommand(command: string, timeoutMs: any, ctx: ToolCallContext): Promise<string> {
     if (!command) return 'Error: command is required'
     if (!this.hooks.autoRun()) {
-      const ok = await this.hooks.approve(command)
+      // Jev decision gate: safe commands (read-only, tests, builds) auto-run
+      // instead of blocking on human approval. Risky/unknown still ask.
+      const settings = getSettings()
+      let ok = false
+      if (settings.jevApiKey && settings.jevAutoApprove !== false) {
+        const verdict = await jevCommandVerdict(settings, command)
+        if (verdict === 'safe') ok = true
+        else ok = await this.hooks.approve(command)
+      } else {
+        ok = await this.hooks.approve(command)
+      }
       if (!ok) return `Command "${command}" was not approved by the user.`
     }
     const timeout = Math.min(Number(timeoutMs) || 120000, 300000)
