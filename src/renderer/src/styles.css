@@ -537,6 +537,9 @@ a { color: var(--accent); cursor: pointer; }
 .toggle.mini .toggle-track .toggle-thumb { width: 9px; height: 9px; }
 
 .modal { width: 620px; max-width: 92vw; background: var(--bg2); border: 1px solid var(--border-light); border-radius: 12px; box-shadow: 0 16px 50px var(--shadow); overflow: hidden; }
+.modal-settings { max-height: calc(100vh - 90px); display: flex; flex-direction: column; }
+.modal-settings .modal-body { flex: 1; min-height: 0; overflow-y: auto; }
+.modal-settings .modal-footer { flex-shrink: 0; }
 .modal.review { width: 900px; height: 70vh; display: flex; flex-direction: column; }
 .modal-wide { width: 860px; max-width: 94vw; height: 74vh; display: flex; flex-direction: column; }
 .modal-wide .modal-body { flex: 1; min-height: 0; }

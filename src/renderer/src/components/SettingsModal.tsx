@@ -67,12 +67,17 @@ export function SettingsModal() {
 
   return (
     <div className="overlay" onClick={() => set('settingsModalOpen', false)}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal modal-settings" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <span><Icon name="settings" size={14} /> Settings</span>
-          <button className="icon-btn" onClick={() => set('settingsModalOpen', false)}>
-            <Icon name="x" size={12} />
-          </button>
+          <div className="modal-header-actions">
+            <button className={`btn primary ${saved ? 'saved' : ''}`} onClick={() => void save()} title="Save settings">
+              {saved ? <><Icon name="check" size={12} /> Saved</> : 'Save'}
+            </button>
+            <button className="icon-btn" onClick={() => set('settingsModalOpen', false)}>
+              <Icon name="x" size={12} />
+            </button>
+          </div>
         </div>
         <div className="modal-body">
           <div className="field">

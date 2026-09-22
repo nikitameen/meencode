@@ -14,6 +14,7 @@ export interface CompletionRequest {
  */
 export async function complete(cfg: Settings, req: CompletionRequest, signal?: AbortSignal): Promise<string> {
   const base = cfg.baseUrl.replace(/\/+$/, '')
+  const model = cfg.fastModel || cfg.model || 'jev-model'
   const res = await proxySafeFetch(`${base}/v1/chat/completions`, {
     method: 'POST',
     headers: {
@@ -21,7 +22,7 @@ export async function complete(cfg: Settings, req: CompletionRequest, signal?: A
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: cfg.model,
+      model,
       messages: [
         { role: 'system', content: req.system },
         { role: 'user', content: req.user }
@@ -35,7 +36,7 @@ export async function complete(cfg: Settings, req: CompletionRequest, signal?: A
   if (res.status === 401 || res.status === 403) throw new Error('Invalid API key')
   if (!res.ok) {
     const t = await res.text().catch(() => '')
-    throw new Error(`Ollama Cloud error ${res.status}: ${t.slice(0, 200)}`)
+    throw new Error(`API provider error ${res.status}: ${t.slice(0, 200)}`)
   }
   const j: any = await res.json()
   const msg = j.choices?.[0]?.message

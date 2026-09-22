@@ -394,14 +394,30 @@ export class Toolkit {
       throw e
     }
     if (!oldStr) return `Error: old_string is empty — provide exact text to replace.`
-    const count = raw.split(oldStr).length - 1
+    
+    let targetOld = oldStr
+    let targetRaw = raw
+    let count = targetRaw.split(targetOld).length - 1
+
+    // Fallback: line-ending normalization (\r\n vs \n)
+    if (count === 0) {
+      const normRaw = raw.replace(/\r\n/g, '\n')
+      const normOld = oldStr.replace(/\r\n/g, '\n')
+      const normCount = normRaw.split(normOld).length - 1
+      if (normCount > 0) {
+        targetRaw = normRaw
+        targetOld = normOld
+        count = normCount
+      }
+    }
+
     if (count === 0) {
       return `Error: old_string not found in ${this.toPosix(abs)}. Read the file again and copy the exact text (including whitespace/indentation).`
     }
     if (count > 1 && !replaceAll) {
       return `Error: old_string occurs ${count} times in ${this.toPosix(abs)}. Make it unique, or set replace_all=true.`
     }
-    const next = replaceAll ? raw.split(oldStr).join(newStr) : raw.replace(oldStr, newStr)
+    const next = replaceAll ? targetRaw.split(targetOld).join(newStr) : targetRaw.replace(targetOld, newStr)
     await this.checkpoint(abs, raw)
     await fs.promises.writeFile(abs, next)
     const kind: ChangeKind = 'modified'
