@@ -74,7 +74,7 @@ export class AgentSession {
     this.root = this.roots[0] ?? null
     this.history = []
     this.plan = []
-    this.forcedApplyRetry = false
+    this.forcedApplyRetry = 0
     this.lastUserText = null
       if (this.root) {
       this.toolkit = new Toolkit(this.roots, {
@@ -111,7 +111,7 @@ export class AgentSession {
   async send(text: string, attachedFile?: string | null, images?: { name: string; dataUrl: string }[], ide?: IDEContext | null): Promise<void> {
     const settings = this.io.getSettings()
     this.lastUserText = text
-    this.forcedApplyRetry = false
+    this.forcedApplyRetry = 0
     if (!this.root) {
       this.emit({ type: 'run_start', runId: 'x' })
       this.emit({ type: 'run_end', runId: 'x', error: 'Open a workspace folder first.' })
@@ -394,19 +394,45 @@ Do not include greetings or explanations outside the bullet points.`
     return `${base}\n\n${learned}`
   }
 
-  /** once per run: the model answered with code-in-prose instead of applying it */
-  private forcedApplyRetry = false
+  /** bounded retry budget for "declared done but work not applied" answers */
+  private forcedApplyRetry = 0
+  private static readonly MAX_APPLY_RETRIES = 3
 
   private isRunComplete(finalText: string, toolCallsMade: number, nudge: { text: string }): boolean {
-    // Cursor-style termination: the model stops calling tools -> done.
-    // One exception: the model wrote code in its ANSWER (fenced block) but
-    // never actually edited any file. That is prose-instead-of-code — force
-    // ONE retry demanding the edit be applied with the tools.
-    if (!this.forcedApplyRetry && toolCallsMade === 0 && /```/.test(finalText) && /\b(create|add|write|implement|make|fix|update|change|refactor|move|rename|delete)\b/i.test(this.lastUserText ?? '')) {
-      this.forcedApplyRetry = true
-      nudge.text = 'You answered with code in chat instead of editing the files. Apply the change NOW using write_file/edit_file. Do not repeat the code in your reply — just make the edit and confirm briefly.'
+    // A run is complete only when the requested CHANGE actually exists on
+    // disk — not when the model merely SAYS it is done. The old rule
+    // (any prose answer = done) let the agent stop after narrating a plan
+    // or a fake "Done!" without ever touching a file.
+    const userText = (this.lastUserText ?? '').trim()
+    const changeVerbs = /\b(create|add|write|implement|make|fix|update|change|refactor|move|rename|delete|remove|build|set\s*up|install|test)\b/i
+    const asksForChange = changeVerbs.test(userText)
+    const changesMade = (this.toolkit?.getChanges() ?? []).length > 0
+    const toolsUsed = toolCallsMade > 0
+    const hasFencedCode = /```/.test(finalText)
+
+    if (!asksForChange) return true // question/discussion: prose answer is fine
+
+    // Work requested but nothing was ever edited or even attempted:
+    // force the agent to actually DO it (bounded, no infinite loop).
+    if (!changesMade && !toolsUsed && this.forcedApplyRetry < AgentSession.MAX_APPLY_RETRIES) {
+      this.forcedApplyRetry++
+      if (hasFencedCode) {
+        nudge.text = 'You answered with code in chat but no file was edited. Apply the change NOW using write_file/edit_file. Do not repeat the code — edit the files and confirm in one line.'
+      } else {
+        nudge.text = `You have not made any edits yet. ${userText.slice(0, 400)}\nDo the work now with your file tools (read what you need, then write_file/edit_file). Reply only after the edits exist on disk.`
+      }
       return false
     }
+
+    // Tools were called but the requested edit still did not land on disk
+    // (e.g. the model only read files, then narrated a plan). One bounded
+    // chance to actually apply it before accepting completion.
+    if (!changesMade && toolsUsed && this.forcedApplyRetry < AgentSession.MAX_APPLY_RETRIES) {
+      this.forcedApplyRetry++
+      nudge.text = 'You explored but no requested file was changed. Apply the actual edit now with write_file/edit_file — or, if this genuinely needs no file change, state what you verified on disk.'
+      return false
+    }
+
     return true
   }
   private lastUserText: string | null = null
