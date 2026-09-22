@@ -739,10 +739,10 @@ function CodeBlock({ lang, content }: { lang: string; content: string }) {
 
 function JevNote(props: { id: string; kind: 'jev'; label: string; detail: string }) {
   return (
-    <div className="jev-note" title={props.detail}>
+    <div className="jev-note" title={props.detail || undefined}>
       <span className="jev-note-badge">Jev</span>
       <span className="jev-note-label">{props.label.replace(/^Jev · /, '')}</span>
-      <span className="jev-note-detail">{props.detail}</span>
+      {props.detail && <span className="jev-note-detail">{props.detail}</span>}
     </div>
   )
 }

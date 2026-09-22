@@ -105,6 +105,7 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
   const MAX_EMPTY_RETRIES = 2
   let emptyTurns = 0
   let turnsWithoutEdit = 0
+  let jevInterrupts = 0
   let recentToolNames: string[] = []
   const chat = async (msgs: AgentMessage[]) => {
     for (let attempt = 0; ; attempt++) {
@@ -144,10 +145,13 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
       }
 
       // Jev exploration gate: before asking the model again, let the decision
-      // layer interrupt wasteful read-loops with an 'edit now' nudge.
-      if (deps.beforeTurn && turnsWithoutEdit >= 3) {
+      // layer interrupt wasteful read-loops with an 'edit now' nudge. Bounded:
+      // at most 2 interrupts per run — a stubborn read-loop eventually gets
+      // the deterministic 'finish now' nudge from the iteration cap instead.
+      if (deps.beforeTurn && turnsWithoutEdit >= 3 && jevInterrupts < 2) {
         const jevNudge = await deps.beforeTurn(loop, recentToolNames, turnsWithoutEdit)
         if (jevNudge) {
+          jevInterrupts++
           messages.push({ role: 'user', content: jevNudge })
           turnsWithoutEdit = 0
         }
@@ -161,7 +165,13 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
 
     if (res.toolCalls.length > 0) {
       emptyTurns = 0
-      recentToolNames = res.toolCalls.map((c) => c.name)
+      // rich trace: tool name + its target (path/pattern/query) so the Jev
+      // exploration gate sees WHAT was examined, not just that reading happened
+      recentToolNames = res.toolCalls.map((c) => {
+        const t = c.name
+        const target = (c.args as any)?.path ?? (c.args as any)?.pattern ?? (c.args as any)?.query ?? ''
+        return target ? `${t}:${String(target).slice(0, 120)}` : t
+      })
       const madeEdits = res.toolCalls.some((c) => c.name === 'write_file' || c.name === 'edit_file' || c.name === 'delete_file')
       turnsWithoutEdit = madeEdits ? 0 : turnsWithoutEdit + 1
       messages.push({

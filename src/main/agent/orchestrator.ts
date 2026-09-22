@@ -167,17 +167,18 @@ export class AgentSession {
       let focusDirective = ''
       try {
         if (settings.jevApiKey && settings.jevRouting !== false) {
-          const t0 = Date.now()
           focusDirective = (await jevFocusDirective(settings, text)) ?? ''
-          if (focusDirective) {
-            const kind = focusDirective.includes('underspecified') ? 'ambiguous request — read first, then implement'
-              : focusDirective.includes('code-change request') ? 'code-change request — going straight to edits'
+          // Only surface Jev when its decision CHANGES the run: an ambiguous
+          // request (read-first directive) or a non-edit intent. A plain
+          // 'go edit' classification is the default behavior — noise.
+          if (focusDirective && (focusDirective.includes('underspecified') || !focusDirective.includes('code-change request'))) {
+            const kind = focusDirective.includes('underspecified') ? 'ambiguous request — reading first, then implementing'
               : focusDirective.includes('run/verify') ? 'run/verify request'
               : focusDirective.includes('code-review') ? 'code-review request'
               : focusDirective.includes('setup/scaffold') ? 'setup request'
               : focusDirective.includes('explanation request') ? 'explanation request'
               : 'request classified'
-            this.emit({ type: 'jev_activity', label: `Jev · ${kind}`, detail: `intent classified in ${Date.now() - t0}ms` })
+            this.emit({ type: 'jev_activity', label: `Jev · ${kind}`, detail: '' })
           }
         }
       } catch { /* partner advice is best-effort */ }
@@ -222,11 +223,11 @@ export class AgentSession {
           beforeTurn: async (turn, recentTools, turnsWithoutEdit) => {
             if (!settings.jevApiKey || settings.jevRouting === false) return null
             const verdict = await jevExplorationVerdict(settings, this.lastUserText ?? '', recentTools, turnsWithoutEdit)
-            if (verdict === null) return null
-            this.emit({ type: 'jev_activity', label: `Jev · exploration gate`, detail: verdict === 'edit' ? 'enough context — nudged the agent to edit now' : 'key areas not yet examined — exploration continues' })
-            return verdict === 'edit'
-              ? 'You have examined enough context for this task. STOP reading/searching now and make the requested changes with write_file/edit_file. If a detail is truly missing, make the most reasonable choice and note it.'
-              : null
+            // 'explore' changes nothing (the agent was going to continue anyway)
+            // — only the actionable 'edit' interrupt is worth showing.
+            if (verdict !== 'edit') return null
+            this.emit({ type: 'jev_activity', label: 'Jev · exploration gate', detail: 'enough context — nudged the agent to edit now' })
+            return 'You have examined enough context for this task. STOP reading/searching now and make the requested changes with write_file/edit_file. If a detail is truly missing, make the most reasonable choice and note it.'
           }
         },
         this.buildSystemPrompt(),
