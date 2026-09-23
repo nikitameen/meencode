@@ -6,6 +6,8 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import initSqlJs from 'sql.js'
 import { app } from 'electron'
+import { fileEdges } from './depGraph'
+import { dropSliceVectors, updateSliceVectors, buildVectorIndex } from './vectorIndex'
 
 export interface Slice {
   rel: string
@@ -101,6 +103,14 @@ export async function initSliceDb(dbPath?: string): Promise<void> {
       PRIMARY KEY (root, term, slice_id)
     );
     CREATE INDEX IF NOT EXISTS idx_terms_slice ON terms(slice_id);
+    CREATE TABLE IF NOT EXISTS dep_edges (
+      root TEXT NOT NULL,
+      from_rel TEXT NOT NULL,
+      to_rel TEXT NOT NULL,
+      spec TEXT NOT NULL,
+      PRIMARY KEY (root, from_rel, spec)
+    );
+    CREATE INDEX IF NOT EXISTS idx_deps_to ON dep_edges(root, to_rel);
   `)
   dirty = false
 }
@@ -318,12 +328,22 @@ export function indexFileContent(root: string, rel: string, content: string): { 
   const existing = row1('SELECT hash FROM files WHERE root = ? AND rel = ?', [root, rel])
   if (existing && String(existing.hash) === hash) return { skipped: true, slices: 0 }
   const slices = chunkFile(rel, content)
+  const prevIds: number[] = existing
+    ? rows('SELECT id FROM slices WHERE root = ? AND rel = ?', [root, rel]).map((r) => Number(r.id))
+    : []
   db.run('BEGIN TRANSACTION')
   try {
     db.run('DELETE FROM terms WHERE root = ? AND slice_id IN (SELECT id FROM slices WHERE root = ? AND rel = ?)', [root, root, rel])
     db.run('DELETE FROM slices WHERE root = ? AND rel = ?', [root, rel])
     db.run('DELETE FROM files WHERE root = ? AND rel = ?', [root, rel])
+    db.run('DELETE FROM dep_edges WHERE root = ? AND from_rel = ?', [root, rel])
     db.run('INSERT INTO files (root, rel, hash) VALUES (?, ?, ?)', [root, rel, hash])
+    // dependency graph edges (resolved workspace imports only)
+    for (const e of fileEdges(root, rel, content)) {
+      if (!e.to || e.to === rel) continue
+      db.run('INSERT OR REPLACE INTO dep_edges (root, from_rel, to_rel, spec) VALUES (?, ?, ?, ?)', [root, rel, e.to, e.spec])
+    }
+    const inserted: any[] = []
     for (const s of slices) {
       const terms = sliceTerms(s)
       let len = 0
@@ -334,12 +354,18 @@ export function indexFileContent(root: string, rel: string, content: string): { 
       )
       const id = row1('SELECT last_insert_rowid() AS id')
       const idNum = Number(id?.id ?? 0)
+      inserted.push({ id: idNum, rel: s.rel, line: s.line, endLine: s.endLine, symbol: s.symbol, kind: s.kind, body: s.body })
       for (const [term, tf] of terms) {
         db.run('INSERT OR REPLACE INTO terms (root, term, slice_id, tf) VALUES (?, ?, ?, ?)', [root, term, idNum, tf])
       }
     }
     db.run('COMMIT')
     dirty = true
+    // vector index: drop stale, add fresh (best-effort, in-memory)
+    try {
+      dropSliceVectors(root, prevIds)
+      updateSliceVectors(root, inserted)
+    } catch { /* vectors are an accelerator, never a dependency */ }
     return { skipped: false, slices: slices.length }
   } catch (e) {
     try { db.run('ROLLBACK') } catch { /* ignore */ }
@@ -442,6 +468,8 @@ export async function indexRoot(root: string, onProgress?: (done: number, total:
     }
   }
   flushSliceDb()
+  // rebuild the in-memory vector index for this root (brain's semantic channel)
+  try { rebuildVectorsForRoot(absRoot) } catch { /* vectors are best-effort */ }
   const sliceCount = row1('SELECT COUNT(*) AS n FROM slices WHERE root = ?', [absRoot])
   return {
     files: files.length,
@@ -560,4 +588,31 @@ export function sliceStoreStats(root: string): { files: number; slices: number; 
   const s = row1('SELECT COUNT(*) AS n FROM slices WHERE root = ?', [root])
   const t = row1('SELECT COUNT(*) AS n FROM terms WHERE root = ?', [root])
   return { files: Number(f?.n ?? 0), slices: Number(s?.n ?? 0), terms: Number(t?.n ?? 0) }
+}
+
+// ---------------- dependency graph ----------------
+
+/** files that import `rel` — impact analysis before an edit */
+export function importersOf(root: string, rel: string, limit = 25): string[] {
+  if (!db) return []
+  return rows('SELECT DISTINCT from_rel AS f FROM dep_edges WHERE root = ? AND to_rel = ? LIMIT ?', [root, rel, limit])
+    .map((r) => String(r.f))
+}
+
+/** files `rel` imports */
+export function importsOf(root: string, rel: string, limit = 40): string[] {
+  if (!db) return []
+  return rows('SELECT DISTINCT to_rel AS t FROM dep_edges WHERE root = ? AND from_rel = ? LIMIT ?', [root, rel, limit])
+    .map((r) => String(r.t))
+}
+
+/** rebuild the in-memory vector index for a root from current slice rows */
+export function rebuildVectorsForRoot(root: string): number {
+  if (!db) return 0
+  const rs = rows('SELECT id, rel, line, end_line, symbol, kind, body FROM slices WHERE root = ?', [root]).map((s) => ({
+    id: Number(s.id), rel: String(s.rel), line: Number(s.line), endLine: Number(s.end_line),
+    symbol: s.symbol == null ? null : String(s.symbol), kind: String(s.kind), body: String(s.body)
+  }))
+  buildVectorIndex(root, rs)
+  return rs.length
 }

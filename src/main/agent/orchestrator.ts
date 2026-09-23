@@ -10,6 +10,7 @@ import { runLoop, truncate, compactHistoryBytes, compactHistory } from './loop'
 import { complete, stripReasoning } from './quickLLM'
 import { SUBAGENTS, SPAWN_AGENT_TOOL, orchestratorSystemPrompt, parsePlan, parseVerdict, type SubAgentName } from './subagents'
 import { searchCodebaseIndex } from './codebaseIndexBridge'
+import { findRelevantCode, brainBlock } from '../repoBrain'
 import { buildContextBlock, type IDEContext } from '../agentContext'
 import { appendHistory } from '../workspaceMemory'
 import * as sessionStore from '../sessionStore'
@@ -358,24 +359,19 @@ Do not include greetings or explanations outside the bullet points.`
       if (snap) out += `\n\n${snap}`
     }
 
-    // Per-turn prefetch: the symbol-level index answers BEFORE the agent
-    // starts exploring. Runs on EVERY turn (not just the first) so follow-up
-    // questions get indexed context too. Cached LLM expansions widen the net;
-    // slices already injected earlier in the session are excluded.
+    // Per-turn Repository Brain: one fused query over keyword (BM25) + local
+    // vectors + symbols + dependency graph + behavior prior — the agent gets
+    // the right code (plus related tests/API/importers) BEFORE exploring.
+    // Runs on EVERY turn; expansions come from the cached LLM channel.
     try {
       const settings = this.io.getSettings()
       const expansions = settings.apiKey && settings.fastModel
         ? await expandQuery(text, { apiKey: settings.apiKey, baseUrl: settings.baseUrl, fastModel: settings.fastModel }).catch(() => [] as string[])
         : []
-      const seenRels = this.history
-        .filter((m) => m.role === 'user')
-        .flatMap((m) => [...String(m.content ?? '').matchAll(/### (\S+?):\d+-\d+/g)].map((x) => x[1]))
-      const pack = buildPrefetchPack(this.toolkit?.roots ?? [root], text, {
-        expansions,
-        excludeRels: seenRels
-      })
-      if (pack) out += `\n\n${pack}`
-    } catch { /* prefetch must never break a run */ }
+      const res = findRelevantCode(this.toolkit?.roots ?? [root], text, { expansions })
+      const block = brainBlock(res)
+      if (block) out += `\n\n${block}`
+    } catch { /* the brain must never break a run */ }
 
     // full auto-context: IDE state, git, workspace memory, relevant code, last failure
     try {

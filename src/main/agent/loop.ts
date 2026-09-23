@@ -188,7 +188,7 @@ export async function runLoop(deps: LoopDeps, system: string, history: AgentMess
       // PARALLEL execution: batched tool calls run concurrently.
       // - read tools are always safe
       // - spawn_agent calls are safe when they target DIFFERENT sub-agents (independent work)
-      const safeKinds = new Set(['list_dir', 'read_file', 'search_files', 'grep'])
+      const safeKinds = new Set(['list_dir', 'read_file', 'search_files', 'grep', 'brain_query'])
       const seenAgents = new Set<string>()
       let spawnsConflict = false
       for (const c of res.toolCalls) {

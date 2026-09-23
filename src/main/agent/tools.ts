@@ -10,6 +10,7 @@ import { recordFailedCommand } from '../agentContext'
 import { semanticSearch } from '../semanticSearch'
 import { getSettings } from '../settingsStore'
 import { jevCommandVerdict } from './jevClient'
+import { findRelevantCode, brainBlock } from '../repoBrain'
 import { mcpManager, type MCPToolDef } from '../mcpManager'
 import { compareScreenshots } from '../visionTools'
 
@@ -175,6 +176,15 @@ export class Toolkit {
           }
         },
         {
+          name: 'brain_query',
+          description: 'Ask the Repository Brain: one fused query over keyword + semantic vector + symbol + dependency-graph indexes. Returns the most relevant code slices (with symbols and line ranges), related tests, related API routes, and files that import the hits (edit-impact). Prefer this over repeated read/search when looking for where a feature lives.',
+          parameters: {
+            type: 'object',
+            properties: { query: { type: 'string', description: 'What to find, e.g. "user authentication login flow"' } },
+            required: ['query']
+          }
+        },
+        {
           name: 'compare_screenshots',
           description: 'Compare a live screenshot (image file path) to a reference image using a vision model. Returns differences and CSS/UI fix recommendations.',
           parameters: {
@@ -214,7 +224,7 @@ export class Toolkit {
       // If the normalized name is not a built-in, check whether it is a registered
       // MCP tool. This prevents "unknown tool" for any tool the agent was actually
       // given in its tool list.
-      const BUILT_INS = new Set(['list_dir', 'read_file', 'write_file', 'edit_file', 'delete_file', 'search_files', 'grep', 'run_command', 'search_codebase', 'compare_screenshots'])
+      const BUILT_INS = new Set(['list_dir', 'read_file', 'write_file', 'edit_file', 'delete_file', 'search_files', 'grep', 'run_command', 'search_codebase', 'brain_query', 'compare_screenshots'])
       if (!BUILT_INS.has(normalized)) {
         const mcp = this.defs.find((d) => d.name === normalized && d.description.startsWith('['))
         if (mcp) return await mcpManager.call(normalized, args ?? {})
@@ -238,6 +248,13 @@ export class Toolkit {
           const r = this.searchCodebase(q, limit)
           if (typeof r === 'string') return r
           return await this.semanticFallback(r.q.slice(0, 300), r.limit)
+        }
+        case 'brain_query': {
+          const q = String(args.query ?? '').trim()
+          if (!q) return 'Error: query is required'
+          const res = findRelevantCode(this.roots, q)
+          const block = brainBlock(res, 12000)
+          return block || `No index hits for "${q}". The index may still be building — fall back to grep.`
         }
         case 'compare_screenshots': {
           const { screenshot_path, reference_path, prompt } = args ?? {}
